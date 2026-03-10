@@ -1,0 +1,38 @@
+{
+  "name": "@logiqo/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "pnpm --filter @logiqo/db db:generate",
+    "db:migrate": "pnpm --filter @logiqo/db db:migrate"
+  },
+  "dependencies": {
+    "fastify": "^4.27.0",
+    "@fastify/jwt": "^8.0.0",
+    "@fastify/cors": "^9.0.0",
+    "@fastify/helmet": "^11.0.0",
+    "@fastify/rate-limit": "^9.0.0",
+    "@fastify/multipart": "^8.0.0",
+    "@aws-sdk/client-s3": "^3.600.0",
+    "@aws-sdk/s3-request-presigner": "^3.600.0",
+    "jwks-rsa": "^3.1.0",
+    "zod": "^3.23.0",
+    "ioredis": "^5.3.0",
+    "pino": "^9.0.0",
+    "pino-pretty": "^11.0.0",
+    "fastify-plugin": "^4.5.0",
+    "@logiqo/shared": "workspace:*",
+    "@logiqo/db": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0",
+    "tsx": "^4.11.0",
+    "eslint": "^8.57.0"
+  }
+}

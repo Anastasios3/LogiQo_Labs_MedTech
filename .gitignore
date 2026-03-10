@@ -1,0 +1,46 @@
+# Environment files — NEVER commit secrets
+.env
+.env.local
+.env.*.local
+.env.production
+
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+.next/
+dist/
+build/
+out/
+
+# Prisma generated
+packages/db/node_modules/
+
+# pnpm store
+.pnpm-store/
+
+# Claude project config (local only)
+.claude/
+
+# Turbo cache
+.turbo/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+
+# Coverage
+coverage/
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# Test outputs
+test-results/
+playwright-report/

@@ -1,0 +1,55 @@
+version: "3.9"
+
+# Local development infrastructure
+# Run: docker compose up -d
+# Then: pnpm dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: logiqo_postgres
+    environment:
+      POSTGRES_USER: logiqo
+      POSTGRES_PASSWORD: localdev_only
+      POSTGRES_DB: logiqo_medtech
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U logiqo -d logiqo_medtech"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: logiqo_redis
+    command: redis-server --requirepass localdev_only
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "localdev_only", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # OpenSearch (Phase 2 — comment out if not needed for MVP)
+  # opensearch:
+  #   image: opensearchproject/opensearch:2.13.0
+  #   container_name: logiqo_opensearch
+  #   environment:
+  #     - discovery.type=single-node
+  #     - OPENSEARCH_INITIAL_ADMIN_PASSWORD=LocalDev_1234!
+  #     - plugins.security.disabled=true  # Dev only
+  #   ports:
+  #     - "9200:9200"
+  #   volumes:
+  #     - opensearch_data:/usr/share/opensearch/data
+
+volumes:
+  postgres_data:
+  redis_data:
+  # opensearch_data:

@@ -1,0 +1,347 @@
+// LogiQo MedTech — Prisma Schema
+// HIPAA-compliant PostgreSQL schema with multi-tenant Row-Level Security.
+// RLS policies are applied via migration SQL (not expressible in Prisma schema).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// TENANTS & USERS
+// ============================================================
+
+model Tenant {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name         String
+  slug         String    @unique
+  planTier     String    @default("standard")
+  baaSignedAt  DateTime?
+  baaDocumentS3 String?
+  isActive     Boolean   @default(true)
+  settings     Json      @default("{}")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  users                       User[]
+  annotations                 Annotation[]
+  sops                        Sop[]
+  auditLogs                   AuditLog[]
+  tenantAlertAcknowledgements TenantAlertAcknowledgement[]
+
+  @@map("tenants")
+}
+
+model User {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId            String    @db.Uuid
+  auth0UserId         String    @unique
+  email               String
+  fullName            String
+  role                String    // surgeon | hospital_safety_officer | system_admin | it_procurement
+  specialty           String?
+  npiNumber           String?
+  isVerifiedClinician Boolean   @default(false)
+  isActive            Boolean   @default(true)
+  lastLoginAt         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  tenant                      Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  annotations                 Annotation[]                 @relation("AnnotationAuthor")
+  annotationReviews           Annotation[]                 @relation("AnnotationReviewer")
+  annotationEndorsements      AnnotationEndorsement[]
+  approvedDevices             Device[]                     @relation("DeviceApprover")
+  uploadedDocuments           DeviceDocument[]
+  tenantAlertAcknowledgements TenantAlertAcknowledgement[] @relation("AcknowledgedBy")
+  createdSops                 Sop[]                        @relation("SopCreator")
+  approvedSops                Sop[]                        @relation("SopApprover")
+
+  @@unique([tenantId, email])
+  @@map("users")
+}
+
+// ============================================================
+// HARDWARE INDEX
+// ============================================================
+
+model Manufacturer {
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                String
+  slug                String   @unique
+  countryOfOrigin     String?
+  fdaEstablishmentId  String?
+  contactEmail        String?
+  websiteUrl          String?
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+
+  devices Device[]
+
+  @@map("manufacturers")
+}
+
+model DeviceCategory {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  parentId  String?  @db.Uuid
+  code      String   @unique
+  createdAt DateTime @default(now())
+
+  parent   DeviceCategory?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children DeviceCategory[] @relation("CategoryHierarchy")
+  devices  Device[]
+
+  @@map("device_categories")
+}
+
+model Device {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sku                 String
+  manufacturerId      String    @db.Uuid
+  categoryId          String    @db.Uuid
+  name                String
+  description         String?
+  modelNumber         String?
+  version             String?
+
+  // Regulatory
+  fdA510kNumber       String?
+  ceMmarkNumber       String?
+  regulatoryStatus    String    @default("approved")  // approved | recalled | pending | withdrawn
+
+  // Clinical data (semi-structured)
+  materialComposition Json?
+  dimensionsMm        Json?
+  compatibilityMatrix Json?
+  extractionTooling   Json?
+  sterilizationMethod String?
+
+  // Approval workflow
+  approvalStatus      String    @default("pending")   // pending | approved | rejected
+  approvedById        String?   @db.Uuid
+  approvedAt          DateTime?
+
+  isActive            Boolean   @default(true)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  manufacturer        Manufacturer    @relation(fields: [manufacturerId], references: [id])
+  category            DeviceCategory  @relation(fields: [categoryId], references: [id])
+  approvedBy          User?           @relation("DeviceApprover", fields: [approvedById], references: [id])
+  documents           DeviceDocument[]
+  annotations         Annotation[]
+  alertDeviceLinks    AlertDeviceLink[]
+
+  @@unique([sku, manufacturerId])
+  @@map("devices")
+}
+
+model DeviceDocument {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  deviceId        String   @db.Uuid
+  documentType    String   // ifu | image | technical_spec | safety_notice
+  title           String
+  s3Key           String   // NEVER expose this directly — generate pre-signed URLs
+  fileSizeBytes   BigInt?
+  mimeType        String?
+  version         String?
+  uploadedById    String?  @db.Uuid
+  isCurrent       Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  device     Device  @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  uploadedBy User?   @relation(fields: [uploadedById], references: [id])
+
+  @@map("device_documents")
+}
+
+// ============================================================
+// PEER TELEMETRY ANNOTATIONS
+// ============================================================
+
+model Annotation {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  deviceId       String    @db.Uuid
+  tenantId       String    @db.Uuid
+  authorId       String    @db.Uuid
+
+  annotationType String    // operational_friction | failure_mode | material_tolerance | tooling_anomaly | general_observation
+  severity       String?   // low | medium | high | critical
+  title          String
+  body           String
+  structuredData Json?
+
+  // Procedure context — minimized PHI
+  procedureType  String?
+  procedureDate  DateTime? @db.Date      // Date only, not timestamp
+  patientCount   Int?                    // Aggregate count only
+
+  // Visibility
+  visibility     String    @default("tenant")  // tenant | platform
+  isAnonymized   Boolean   @default(false)
+
+  // Moderation
+  isPublished    Boolean   @default(false)
+  reviewedById   String?   @db.Uuid
+  reviewedAt     DateTime?
+  reviewNotes    String?
+
+  // Versioning — annotations are immutable once published
+  version        Int       @default(1)
+  parentId       String?   @db.Uuid
+
+  createdAt      DateTime  @default(now())
+  // No updatedAt: annotations are append-only
+
+  device                  Device                  @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  tenant                  Tenant                  @relation(fields: [tenantId], references: [id])
+  author                  User                    @relation("AnnotationAuthor", fields: [authorId], references: [id])
+  reviewedBy              User?                   @relation("AnnotationReviewer", fields: [reviewedById], references: [id])
+  parent                  Annotation?             @relation("AnnotationVersions", fields: [parentId], references: [id])
+  versions                Annotation[]            @relation("AnnotationVersions")
+  annotationEndorsements  AnnotationEndorsement[]
+
+  @@map("annotations")
+}
+
+model AnnotationEndorsement {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  annotationId String   @db.Uuid
+  userId       String   @db.Uuid
+  createdAt    DateTime @default(now())
+
+  annotation Annotation @relation(fields: [annotationId], references: [id])
+  user       User       @relation(fields: [userId], references: [id])
+
+  @@unique([annotationId, userId])
+  @@map("annotation_endorsements")
+}
+
+// ============================================================
+// ALERTS SYSTEM
+// ============================================================
+
+model Alert {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  alertType    String    // recall | safety_notice | field_correction | hazard_alert
+  source       String    // "FDA MedWatch" | "Manufacturer" | "Manual"
+  externalId   String?   // FDA recall number
+  title        String
+  summary      String
+  fullText     String?
+  severity     String    // low | medium | high | critical
+  affectedSkus String[]  @db.Text
+  publishedAt  DateTime
+  expiresAt    DateTime?
+  sourceUrl    String?
+  rawPayload   Json?
+  ingestedAt   DateTime  @default(now())
+  createdAt    DateTime  @default(now())
+
+  alertDeviceLinks            AlertDeviceLink[]
+  tenantAlertAcknowledgements TenantAlertAcknowledgement[]
+
+  @@map("alerts")
+}
+
+model AlertDeviceLink {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  alertId       String   @db.Uuid
+  deviceId      String   @db.Uuid
+  matchMethod   String   // sku_exact | sku_fuzzy | manual
+  matchedAt     DateTime @default(now())
+
+  alert  Alert  @relation(fields: [alertId], references: [id])
+  device Device @relation(fields: [deviceId], references: [id])
+
+  @@unique([alertId, deviceId])
+  @@map("alert_device_links")
+}
+
+model TenantAlertAcknowledgement {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  alertId          String   @db.Uuid
+  tenantId         String   @db.Uuid
+  acknowledgedById String   @db.Uuid
+  acknowledgedAt   DateTime @default(now())
+  notes            String?
+
+  alert          Alert  @relation(fields: [alertId], references: [id])
+  tenant         Tenant @relation(fields: [tenantId], references: [id])
+  acknowledgedBy User   @relation("AcknowledgedBy", fields: [acknowledgedById], references: [id])
+
+  @@unique([alertId, tenantId])
+  @@map("tenant_alert_acknowledgements")
+}
+
+// ============================================================
+// SOPs
+// ============================================================
+
+model Sop {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId       String    @db.Uuid
+  title          String
+  version        String
+  contentS3Key   String
+  category       String?
+  effectiveDate  DateTime? @db.Date
+  reviewDate     DateTime? @db.Date
+  status         String    @default("draft")  // draft | active | archived
+  createdById    String    @db.Uuid
+  approvedById   String?   @db.Uuid
+  approvedAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  tenant     Tenant @relation(fields: [tenantId], references: [id])
+  createdBy  User   @relation("SopCreator", fields: [createdById], references: [id])
+  approvedBy User?  @relation("SopApprover", fields: [approvedById], references: [id])
+
+  @@map("sops")
+}
+
+// ============================================================
+// IMMUTABLE AUDIT LOG
+// ============================================================
+// CRITICAL: The application DB user (app_user) must have
+// INSERT + SELECT ONLY on this table. No UPDATE or DELETE.
+// Enforced via migration SQL:
+//   REVOKE UPDATE, DELETE ON audit_logs FROM app_user;
+
+model AuditLog {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  // Who (denormalized snapshots at time of action)
+  userId       String?   @db.Uuid
+  tenantId     String?   @db.Uuid
+  userEmail    String?
+  userRole     String?
+
+  // What
+  action       String    // e.g., "device.viewed", "annotation.created"
+  resourceType String
+  resourceId   String?
+
+  // Change data
+  oldValues    Json?
+  newValues    Json?
+
+  // Context
+  ipAddress    String?
+  userAgent    String?
+  requestId    String?
+  sessionId    String?
+
+  createdAt    DateTime  @default(now())
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([resourceType, resourceId])
+  @@map("audit_logs")
+}
