@@ -2,46 +2,333 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ─── Design tokens ──────────────────────────────────────────────────────── */
 @layer base {
   :root {
-    --color-brand: 59 91 219;
+    /* Brand */
+    --brand-50:  240 242 255;
+    --brand-100: 224 231 255;
+    --brand-500: 99 102 241;
+    --brand-600: 79 70 229;
+    --brand-700: 67 56 202;
+
+    /* Sidebar */
+    --sidebar-w: 16rem;
+    --sidebar-bg: 15 15 26;        /* near-black, not flat black */
+    --sidebar-border: 30 30 50;
+
+    /* Transitions */
+    --transition-fast: 100ms ease;
+    --transition-base: 150ms ease;
+
+    /* Focus ring — meets WCAG 2.4.11 */
+    --ring-color: 99 102 241;
+    --ring-offset: 2px;
   }
 
+  /* Smooth font rendering */
   html {
-    @apply antialiased;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    scroll-behavior: smooth;
   }
 
   body {
-    @apply bg-gray-50 text-gray-900;
+    @apply bg-surface-subtle text-gray-900;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /* Visible focus ring for keyboard users (Inclusive Components: focus management) */
+  :focus-visible {
+    outline: 2px solid rgb(var(--ring-color));
+    outline-offset: var(--ring-offset);
+    border-radius: 4px;
+  }
+
+  /* Remove outline for mouse users only — accessibility preserved for keyboard */
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  /* Headings — clear hierarchy, generous spacing */
+  h1 { @apply text-2xl font-bold tracking-tight text-gray-900; }
+  h2 { @apply text-lg font-semibold text-gray-800; }
+  h3 { @apply text-base font-semibold text-gray-800; }
+
+  /* Monospace baseline */
+  code, kbd, pre, .font-mono {
+    font-feature-settings: normal;
+    font-variant-ligatures: none;
   }
 }
 
+/* ─── Skip navigation (Inclusive Components: skip links) ──────────────────── */
 @layer components {
+  .skip-link {
+    @apply absolute left-4 top-4 z-[9999] rounded-md bg-brand-600 px-4 py-2
+           text-sm font-semibold text-white shadow-card-md
+           -translate-y-24 focus:translate-y-0 transition-transform;
+  }
+}
+
+/* ─── Buttons ─────────────────────────────────────────────────────────────── */
+@layer components {
+  /* Primary — high contrast, clear affordance */
   .btn-primary {
-    @apply inline-flex items-center justify-center rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors;
+    @apply inline-flex items-center justify-center gap-2
+           rounded-lg bg-brand-600 px-4 py-2
+           text-sm font-semibold text-white
+           shadow-card
+           hover:bg-brand-700
+           active:scale-[0.98]
+           disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100
+           transition-all duration-[var(--transition-fast)];
   }
 
+  /* Secondary — ghost with clear border */
   .btn-secondary {
-    @apply inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 transition-colors;
+    @apply inline-flex items-center justify-center gap-2
+           rounded-lg border border-gray-300 bg-white px-4 py-2
+           text-sm font-semibold text-gray-700
+           shadow-card
+           hover:bg-surface-muted hover:border-gray-400
+           active:scale-[0.98]
+           disabled:opacity-40 disabled:cursor-not-allowed
+           transition-all duration-[var(--transition-fast)];
   }
 
+  /* Danger — destructive action */
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2
+           rounded-lg border border-red-200 bg-red-50 px-4 py-2
+           text-sm font-semibold text-red-700
+           hover:bg-red-100 hover:border-red-300
+           active:scale-[0.98]
+           disabled:opacity-40 disabled:cursor-not-allowed
+           transition-all duration-[var(--transition-fast)];
+  }
+
+  /* Ghost — low emphasis */
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2
+           rounded-lg px-3 py-1.5
+           text-sm font-medium text-gray-600
+           hover:bg-surface-muted hover:text-gray-900
+           active:scale-[0.98]
+           transition-all duration-[var(--transition-fast)];
+  }
+
+  /* Icon-only button — always needs an aria-label */
+  .btn-icon {
+    @apply inline-flex items-center justify-center
+           rounded-lg p-2
+           text-gray-500
+           hover:bg-surface-muted hover:text-gray-700
+           transition-colors duration-[var(--transition-fast)];
+  }
+}
+
+/* ─── Cards ───────────────────────────────────────────────────────────────── */
+@layer components {
+  /* Default card */
   .card {
-    @apply rounded-lg border border-gray-200 bg-white shadow-sm;
+    @apply rounded-xl border border-gray-200 bg-white shadow-card;
   }
 
+  /* Elevated — use for modals / dropdowns */
+  .card-elevated {
+    @apply rounded-xl border border-gray-200 bg-white shadow-card-lg;
+  }
+
+  /* Interactive card — wraps anchor/button */
+  .card-interactive {
+    @apply rounded-xl border border-gray-200 bg-white shadow-card
+           hover:border-brand-300 hover:shadow-card-md
+           transition-all duration-[var(--transition-base)];
+  }
+}
+
+/* ─── Form controls ───────────────────────────────────────────────────────── */
+@layer components {
+  .input {
+    @apply block w-full rounded-lg border border-gray-300 bg-white
+           px-3.5 py-2.5
+           text-sm text-gray-900 placeholder:text-gray-400
+           shadow-card
+           focus:border-brand-500 focus:ring-1 focus:ring-brand-500
+           disabled:bg-surface-muted disabled:text-gray-500 disabled:cursor-not-allowed
+           transition-colors duration-[var(--transition-fast)];
+  }
+
+  .label {
+    @apply block text-sm font-medium text-gray-700 mb-1.5;
+  }
+
+  .input-with-icon {
+    @apply relative;
+  }
+
+  .input-with-icon .input {
+    @apply pl-10;
+  }
+
+  .input-with-icon .input-icon {
+    @apply pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-gray-400;
+  }
+}
+
+/* ─── Badges ──────────────────────────────────────────────────────────────── */
+@layer components {
+  /* Base badge */
+  .badge {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5
+           text-xs font-semibold tracking-wide;
+  }
+
+  /* Status badges — from Refactoring UI: never use color alone */
+  .badge-approved {
+    @apply badge bg-emerald-50 text-emerald-800 ring-1 ring-inset ring-emerald-200;
+  }
+
+  .badge-pending {
+    @apply badge bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-200;
+  }
+
+  .badge-recalled {
+    @apply badge bg-red-50 text-red-800 ring-1 ring-inset ring-red-200;
+  }
+
+  .badge-inactive {
+    @apply badge bg-gray-100 text-gray-600 ring-1 ring-inset ring-gray-200;
+  }
+
+  /* Severity badges */
   .badge-critical {
-    @apply inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800;
+    @apply badge bg-rose-50 text-rose-800 ring-1 ring-inset ring-rose-200;
   }
 
   .badge-high {
-    @apply inline-flex items-center rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-medium text-orange-800;
+    @apply badge bg-orange-50 text-orange-800 ring-1 ring-inset ring-orange-200;
   }
 
   .badge-medium {
-    @apply inline-flex items-center rounded-full bg-yellow-100 px-2.5 py-0.5 text-xs font-medium text-yellow-800;
+    @apply badge bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-200;
   }
 
   .badge-low {
-    @apply inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800;
+    @apply badge bg-green-50 text-green-800 ring-1 ring-inset ring-green-200;
+  }
+
+  .badge-info {
+    @apply badge bg-sky-50 text-sky-800 ring-1 ring-inset ring-sky-200;
+  }
+
+  /* Alert type */
+  .badge-alert-type {
+    @apply badge bg-surface-muted text-gray-600 ring-1 ring-inset ring-gray-200 uppercase;
+  }
+}
+
+/* ─── Data table ──────────────────────────────────────────────────────────── */
+@layer components {
+  /* Refactoring UI: less border noise, more breathing room */
+  .data-table {
+    @apply min-w-full text-sm;
+  }
+
+  .data-table thead {
+    @apply border-b border-gray-200 bg-surface-subtle;
+  }
+
+  .data-table th {
+    @apply px-4 py-3 text-left text-xs font-semibold uppercase tracking-widest text-gray-500;
+  }
+
+  .data-table th[aria-sort] {
+    @apply cursor-pointer select-none hover:text-gray-800 transition-colors;
+  }
+
+  .data-table tbody tr {
+    @apply border-b border-gray-100 hover:bg-surface-subtle transition-colors duration-[var(--transition-fast)];
+  }
+
+  .data-table tbody tr:last-child {
+    @apply border-b-0;
+  }
+
+  .data-table td {
+    @apply px-4 py-3.5 align-middle;
+  }
+
+  /* Numeric columns right-align */
+  .data-table td[data-numeric],
+  .data-table th[data-numeric] {
+    @apply text-right tabular-nums;
+  }
+}
+
+/* ─── Page structure helpers ──────────────────────────────────────────────── */
+@layer components {
+  .page-header {
+    @apply flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between;
+  }
+
+  .page-title {
+    @apply text-2xl font-bold tracking-tight text-gray-900;
+  }
+
+  .page-subtitle {
+    @apply text-sm text-gray-500 mt-0.5;
+  }
+
+  /* Inline stat card */
+  .stat-card {
+    @apply card flex flex-col gap-1 p-5;
+  }
+
+  .stat-label {
+    @apply text-xs font-semibold uppercase tracking-widest text-gray-400;
+  }
+
+  .stat-value {
+    @apply text-2xl font-bold tabular-nums text-gray-900;
+  }
+}
+
+/* ─── Preview banner ──────────────────────────────────────────────────────── */
+@layer components {
+  .preview-banner {
+    @apply flex items-center gap-2 rounded-lg border border-amber-200
+           bg-amber-50 px-4 py-2.5 text-xs font-medium text-amber-700;
+  }
+}
+
+/* ─── Scrollbar ───────────────────────────────────────────────────────────── */
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: theme("colors.gray.300") transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: theme("colors.gray.300");
+    border-radius: 999px;
+  }
+}
+
+/* ─── Animation utilities ─────────────────────────────────────────────────── */
+@layer utilities {
+  .animate-fade-in {
+    animation: fadeIn 0.15s ease-out both;
   }
 }
