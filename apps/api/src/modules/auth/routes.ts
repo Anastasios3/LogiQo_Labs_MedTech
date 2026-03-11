@@ -1,5 +1,26 @@
+/**
+ * Auth routes:
+ *
+ *   POST /auth/webhook/user-created  — Auth0 post-registration webhook (server→server)
+ *   POST /auth/register              — Client-facing signup with email + password
+ *   GET  /auth/verify-email          — Email verification callback (Auth0 ticket redirect)
+ *
+ * All three are unauthenticated endpoints — no JWT required.
+ * Tenant context is set explicitly where needed.
+ */
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import {
+  createAuth0User,
+  createEmailVerificationTicket,
+  getAuth0User,
+} from "../../lib/auth0-management.js";
+import {
+  signVerificationToken,
+  verifyVerificationToken,
+} from "../../lib/jwt-utils.js";
+
+// ── Zod schemas ───────────────────────────────────────────────────────────────
 
 const auth0WebhookSchema = z.object({
   event: z.object({
@@ -7,11 +28,11 @@ const auth0WebhookSchema = z.object({
     data: z.object({
       object: z.object({
         user_id: z.string(),
-        email: z.string(),
+        email:   z.string(),
         app_metadata: z
           .object({
             tenant_id: z.string().optional(),
-            role: z.string().optional(),
+            role:      z.string().optional(),
           })
           .optional(),
       }),
@@ -19,16 +40,31 @@ const auth0WebhookSchema = z.object({
   }),
 });
 
+const registerSchema = z.object({
+  email: z.string().email("Invalid email format"),
+  password: z
+    .string()
+    .min(8, "Password must be at least 8 characters")
+    .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
+    .regex(/[0-9]/, "Password must contain at least one number"),
+  firstName: z.string().min(1, "First name is required").max(100).trim(),
+  lastName:  z.string().min(1, "Last name is required").max(100).trim(),
+  role: z
+    .enum(["surgeon", "hospital_safety_officer", "it_procurement"])
+    .default("surgeon"),
+  /** Optional — provide when registering as part of an org invite */
+  inviteTenantId: z.string().uuid().optional(),
+});
+
+// ── Route plugin ──────────────────────────────────────────────────────────────
+
 export const authRoutes: FastifyPluginAsync = async (fastify) => {
-  // Auth0 post-registration hook: provision user in our DB
+
+  // ── POST /auth/webhook/user-created ─────────────────────────────────────────
+  // Called by Auth0 post-registration Action. Provisions the user in our DB
+  // as a backup to the client-facing /register endpoint.
   fastify.post(
     "/webhook/user-created",
-    {
-      config: {
-        // This endpoint is called by Auth0, not by clients.
-        // Validate using a shared secret, not a JWT.
-      },
-    },
     async (request, reply) => {
       const webhookSecret = request.headers["x-webhook-secret"];
       if (webhookSecret !== process.env.AUTH0_WEBHOOK_SECRET) {
@@ -39,19 +75,267 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       const { user_id, email, app_metadata } = payload.event.data.object;
 
       await fastify.db.user.upsert({
-        where: { auth0UserId: user_id },
+        where:  { auth0UserId: user_id },
         update: { lastLoginAt: new Date() },
         create: {
-          auth0UserId: user_id,
+          auth0UserId:     user_id,
           email,
-          fullName: email.split("@")[0],
-          role: app_metadata?.role ?? "surgeon",
-          tenantId: app_metadata?.tenant_id ?? process.env.DEFAULT_TENANT_ID!,
-          verificationTier: 0, // New users start unverified
+          fullName:        email.split("@")[0],
+          role:            app_metadata?.role ?? "surgeon",
+          tenantId:        app_metadata?.tenant_id ?? process.env.DEFAULT_TENANT_ID!,
+          verificationTier: 0,
         },
       });
 
       return reply.code(204).send();
     }
   );
+
+  // ── POST /auth/register ──────────────────────────────────────────────────────
+  // Client-facing registration endpoint.
+  // 1. Validates input
+  // 2. Creates user in Auth0 (username/password connection)
+  // 3. Auto-provisions a personal tenant (or links to invite tenant)
+  // 4. Creates user record in our DB at tier 0
+  // 5. Generates signed verification token
+  // 6. Creates Auth0 email-verification ticket with our callback as result_url
+  // 7. Returns { userId, message, verificationUrl }
+  fastify.post("/register", {
+    // Tighter per-route limit: 5 registration attempts per IP per minute.
+    // Overrides the global 100 req/min default for this sensitive endpoint.
+    config: { rateLimit: { max: 5, timeWindow: "1 minute" } },
+  }, async (request, reply) => {
+    let body: z.infer<typeof registerSchema>;
+    try {
+      body = registerSchema.parse(request.body);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return reply.code(400).send({
+          message: "Validation failed",
+          errors:  err.errors.map(e => ({ field: e.path.join("."), message: e.message })),
+        });
+      }
+      throw err;
+    }
+
+    // ── 1. Create user in Auth0 ────────────────────────────────────────────────
+    let auth0User: Awaited<ReturnType<typeof createAuth0User>>;
+    try {
+      auth0User = await createAuth0User({
+        email:     body.email,
+        password:  body.password,
+        firstName: body.firstName,
+        lastName:  body.lastName,
+        role:      body.role,
+      });
+    } catch (err: unknown) {
+      const e = err as { code?: string; statusCode?: number; message?: string };
+      if (e.code === "EMAIL_EXISTS") {
+        return reply.code(409).send({ message: e.message });
+      }
+      if (e.code === "PASSWORD_POLICY") {
+        return reply.code(422).send({ message: e.message });
+      }
+      // Auth0 unreachable in dev (no real credentials) — fall through to DB-only registration
+      fastify.log.warn(
+        { err },
+        "Auth0 registration unavailable; continuing with DB-only user creation"
+      );
+      // Synthesise a placeholder auth0UserId for dev mode
+      auth0User = {
+        user_id:        `dev|${Date.now()}`,
+        email:          body.email,
+        email_verified: false,
+        name:           `${body.firstName} ${body.lastName}`,
+      };
+    }
+
+    // ── 2. Resolve or create tenant ────────────────────────────────────────────
+    let tenantId: string;
+
+    if (body.inviteTenantId) {
+      // Org invite path — verify the tenant exists
+      const tenant = await fastify.db.tenant.findUnique({
+        where:  { id: body.inviteTenantId },
+        select: { id: true, isActive: true },
+      });
+      if (!tenant?.isActive) {
+        return reply.code(404).send({ message: "Invitation tenant not found or inactive." });
+      }
+      tenantId = tenant.id;
+    } else {
+      // Individual path — auto-create a personal tenant
+      // Slug is derived from auth0UserId suffix to guarantee uniqueness
+      const suffix = auth0User.user_id.replace(/^[^|]+\|/, "").slice(0, 10);
+      const tenant = await fastify.db.tenant.create({
+        data: {
+          name:     `${body.firstName} ${body.lastName}`,
+          slug:     `personal-${suffix}`,
+          planTier: "individual",
+          isActive: true,
+          settings: {},
+        },
+        select: { id: true },
+      });
+      tenantId = tenant.id;
+    }
+
+    // ── 3. Provision user in DB at tier 0 ─────────────────────────────────────
+    const user = await fastify.db.user.upsert({
+      where: { auth0UserId: auth0User.user_id },
+      create: {
+        auth0UserId:     auth0User.user_id,
+        tenantId,
+        email:           body.email,
+        fullName:        `${body.firstName} ${body.lastName}`,
+        role:            body.role,
+        verificationTier: 0,
+      },
+      update: {}, // idempotent — no-op if already exists (e.g. webhook beat us)
+      select: { id: true, email: true, tenantId: true, role: true },
+    });
+
+    // ── 4. Build signed verification token ────────────────────────────────────
+    const secret = process.env.AUTH0_SECRET ?? "dev-secret-change-in-production";
+    const verificationToken = signVerificationToken(
+      { auth0UserId: auth0User.user_id, userId: user.id },
+      secret,
+      86_400 // 24 h
+    );
+
+    // ── 5. Create Auth0 email-verification ticket ──────────────────────────────
+    const apiBase  = process.env.API_BASE_URL ?? "http://localhost:8080";
+    const resultUrl = `${apiBase}/auth/verify-email?token=${verificationToken}`;
+
+    let verificationUrl: string = resultUrl; // dev fallback
+
+    try {
+      verificationUrl = await createEmailVerificationTicket(
+        auth0User.user_id,
+        resultUrl,
+        86_400
+      );
+    } catch (ticketErr) {
+      // In dev, Auth0 credentials may not be configured — fall back to our direct token URL.
+      // The GET /auth/verify-email endpoint handles both paths.
+      fastify.log.warn(
+        { err: ticketErr },
+        "Could not create Auth0 verification ticket — using direct token URL (dev fallback)"
+      );
+    }
+
+    // ── 6. Audit log (unauthenticated context — actorOverride supplies actor data) ──
+    await fastify.audit(request, {
+      action:       "user.registered",
+      resourceType: "user",
+      resourceId:   user.id,
+      newValues:    { email: body.email, role: body.role, verificationTier: 0 },
+      actorOverride: {
+        userId:    user.id,
+        tenantId:  user.tenantId,
+        userEmail: user.email,
+        userRole:  user.role,
+      },
+    });
+
+    return reply.code(201).send({
+      userId:  user.id,
+      message: "Account created. A verification email has been sent — please click the link to activate your account.",
+      // dev/test ONLY — NEVER set EXPOSE_VERIFICATION_URL=true on staging or production
+      ...(process.env.EXPOSE_VERIFICATION_URL === "true" && { verificationUrl }),
+    });
+  });
+
+  // ── GET /auth/verify-email?token=<jwt> ───────────────────────────────────────
+  // Email verification callback — called when the user clicks the link in the
+  // verification email (Auth0 ticket → our result_url, or dev direct URL).
+  //
+  // Flow:
+  //   1. Verify our HS256 JWT to extract auth0UserId + userId
+  //   2. In production, confirm Auth0 has email_verified = true via Management API
+  //   3. Update user: verificationTier = 1, emailVerifiedAt = now()
+  //   4. Redirect to frontend onboarding step 2
+  fastify.get("/verify-email", {
+    // Allow up to 10 verification attempts per IP per minute.
+    // Slightly looser than /register since the token itself is the credential.
+    config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+  }, async (request, reply) => {
+    const querySchema = z.object({
+      token: z.string().min(1, "Missing verification token"),
+    });
+
+    let token: string;
+    try {
+      ({ token } = querySchema.parse(request.query));
+    } catch {
+      return reply.code(400).send({ message: "Missing or invalid token parameter" });
+    }
+
+    // ── Step 1: Verify our signed token ────────────────────────────────────────
+    const secret = process.env.AUTH0_SECRET ?? "dev-secret-change-in-production";
+    let payload: ReturnType<typeof verifyVerificationToken>;
+    try {
+      payload = verifyVerificationToken(token, secret);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Token verification failed";
+      return reply.code(400).send({ message: msg });
+    }
+
+    // ── Step 2: Confirm email is verified in Auth0 (production only) ───────────
+    const isDev = !process.env.AUTH0_DOMAIN;
+    if (!isDev) {
+      let auth0User: Awaited<ReturnType<typeof getAuth0User>>;
+      try {
+        auth0User = await getAuth0User(payload.auth0UserId);
+      } catch {
+        return reply.code(502).send({
+          message: "Could not confirm verification status with Auth0. Please try again.",
+        });
+      }
+
+      if (!auth0User.email_verified) {
+        return reply.code(400).send({
+          message:
+            "Your email address has not yet been verified in Auth0. " +
+            "Please click the link in the verification email first.",
+        });
+      }
+    }
+
+    // ── Step 3: Update user in our DB ──────────────────────────────────────────
+    // Guard: if user is already tier 1+, this is a harmless re-verification
+    const existingUser = await fastify.db.user.findUnique({
+      where:  { id: payload.userId },
+      select: { id: true, verificationTier: true, email: true, tenantId: true, role: true },
+    });
+
+    if (!existingUser) {
+      return reply.code(404).send({ message: "User not found." });
+    }
+
+    if (existingUser.verificationTier < 1) {
+      await fastify.db.user.update({
+        where: { id: payload.userId },
+        data:  { verificationTier: 1, emailVerifiedAt: new Date() },
+      });
+    }
+
+    // ── Step 4: Audit ──────────────────────────────────────────────────────────
+    await fastify.audit(request, {
+      action:       "user.email_verified",
+      resourceType: "user",
+      resourceId:   existingUser.id,
+      newValues:    { verificationTier: 1, emailVerifiedAt: new Date().toISOString() },
+      actorOverride: {
+        userId:    existingUser.id,
+        tenantId:  existingUser.tenantId,
+        userEmail: existingUser.email,
+        userRole:  existingUser.role,
+      },
+    });
+
+    // ── Step 5: Redirect to onboarding ─────────────────────────────────────────
+    const appUrl = process.env.APP_URL ?? "http://localhost:3000";
+    return reply.redirect(`${appUrl}/onboarding?step=2&verified=true`);
+  });
 };

@@ -13,6 +13,7 @@ import { adminRoutes } from "./modules/admin/routes.js";
 import { annotationsRoutes } from "./modules/annotations/routes.js";
 import { ingestionRoutes, settingsRoutes } from "./modules/ingestion/routes.js";
 import { usersRoutes, adminUserRoutes } from "./modules/users/routes.js";
+import { authRoutes } from "./modules/auth/routes.js";
 import { startScheduler } from "./jobs/scheduler.js";
 
 const app = Fastify({
@@ -55,7 +56,10 @@ await app.register(redisPlugin);
 await app.register(authPlugin);
 await app.register(auditPlugin);
 
-// Route modules
+// Public auth routes (registration, email verification — no JWT required)
+await app.register(authRoutes, { prefix: "/auth" });
+
+// Route modules (JWT-protected)
 await app.register(devicesRoutes, { prefix: "/devices" });
 await app.register(alertsRoutes, { prefix: "/alerts" });
 await app.register(adminRoutes, { prefix: "/admin" });

@@ -27,9 +27,15 @@ async function lookupNpi(npi: string): Promise<{ valid: boolean; name?: string }
     const data = await res.json() as any;
     if (!data.results?.length) return { valid: false };
     const result = data.results[0];
-    const name =
-      result.basic?.authorized_official_last_name
-        ? `${result.basic.authorized_official_first_name} ${result.basic.authorized_official_last_name}`
+    // NPPES field priority (v2.1 API):
+    //   1. basic.last_name / basic.first_name      — individual providers (most common)
+    //   2. authorized_official_{last,first}_name   — org's authorised official (fallback)
+    //   3. organization_name                       — organisation name
+    //   4. "Unknown"                               — last resort
+    const name = result.basic?.last_name
+      ? `${result.basic.first_name ?? ""} ${result.basic.last_name}`.trim()
+      : result.basic?.authorized_official_last_name
+        ? `${result.basic.authorized_official_first_name ?? ""} ${result.basic.authorized_official_last_name}`.trim()
         : result.basic?.organization_name
           ?? "Unknown";
     return { valid: true, name };
@@ -90,7 +96,12 @@ export const usersRoutes: FastifyPluginAsync = async (fastify) => {
 
     const updated = await fastify.db.user.update({
       where:  { id: user.id },
-      data:   { npiNumber, verificationTier: 2 },
+      data:   {
+        npiNumber,
+        verificationTier:         2,
+        verificationSubmittedAt:  new Date(),
+        verificationApprovedAt:   new Date(),
+      },
       select: { id: true, verificationTier: true, npiNumber: true },
     });
 
@@ -135,7 +146,11 @@ export const adminUserRoutes: FastifyPluginAsync = async (fastify) => {
 
       const updated = await fastify.db.user.update({
         where:  { id: targetId },
-        data:   { verificationTier: tier },
+        data:   {
+          verificationTier:       tier,
+          // Stamp approval timestamp whenever an admin promotes to tier 2+
+          ...(tier >= 2 ? { verificationApprovedAt: new Date() } : {}),
+        },
         select: { id: true, verificationTier: true, fullName: true, email: true },
       });
 

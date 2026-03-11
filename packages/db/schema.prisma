@@ -45,13 +45,22 @@ model User {
   fullName         String
   role             String    // surgeon | hospital_safety_officer | system_admin | it_procurement
   specialty        String?
-  npiNumber        String?
+  npiNumber        String?   @unique
   // Replaces isVerifiedClinician (boolean) — 0-3 verification tier scale:
   //   0 = Registered, email unverified (read-only)
   //   1 = Email verified via hospital domain (read + flag only)
   //   2 = NPI validated against public registry (full participation)
   //   3 = Manually reviewed by admin (trusted contributor, 1.5× vote weight)
-  verificationTier Int       @default(0)
+  verificationTier        Int       @default(0)
+  // Verification timestamps
+  emailVerifiedAt         DateTime?
+  verificationSubmittedAt DateTime? // when NPI was submitted for validation
+  verificationApprovedAt  DateTime? // when tier 2 (NPI validated) or tier 3 (admin promoted)
+  // Subscription fields — synced from Stripe webhooks (Phase 2: Stripe integration)
+  subscriptionStatus      String    @default("none") // none | active | past_due | canceled
+  subscriptionTier        String?                    // individual_monthly | individual_annual | org_monthly | org_annual
+  stripeCustomerId        String?   @unique
+  stripeSubscriptionId    String?   @unique
   isActive         Boolean   @default(true)
   lastLoginAt      DateTime?
   createdAt        DateTime  @default(now())
