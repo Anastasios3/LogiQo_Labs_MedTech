@@ -5,6 +5,8 @@ export type * from "./types/alert.js";
 export type * from "./types/annotation.js";
 export type * from "./types/audit.js";
 export type * from "./types/common.js";
+export type * from "./types/ingestion.js";
+export * from "./types/ingestion.js";
 
 // ── Zod validation schemas ─────────────────────────────────────────────────
 // These are the single source of truth for request/response shapes.

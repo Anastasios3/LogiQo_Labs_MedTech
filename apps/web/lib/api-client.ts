@@ -1,4 +1,4 @@
-import type { Device, DeviceListResponse, Alert, AuditLog, Annotation } from "@logiqo/shared";
+import type { Device, DeviceListResponse, Alert, AuditLog, Annotation, IngestionRun, TenantDataSources, GudidDeviceInfo } from "@logiqo/shared";
 
 // Server components reach Fastify directly; browser client components use the
 // Next.js rewrite proxy (/api/backend → localhost:8080) to avoid cross-port issues.
@@ -14,7 +14,9 @@ async function apiFetch<T>(
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers: {
-      "Content-Type": "application/json",
+      // Only attach Content-Type when there is a body — Fastify's strict JSON
+      // body parser rejects requests with 'application/json' but no body.
+      ...(options?.body != null ? { "Content-Type": "application/json" } : {}),
       ...options?.headers,
     },
     cache: "no-store",
@@ -89,6 +91,9 @@ export const apiClient = {
       apiFetch<{ url: string; expiresAt: string }>(
         `/devices/${deviceId}/documents/${documentId}/url`
       ),
+
+    gudidLookup: (udi: string) =>
+      apiFetch<GudidDeviceInfo>(`/devices/gudid-lookup?udi=${encodeURIComponent(udi)}`),
   },
 
   // ── Alerts ───────────────────────────────────────────────────────────────────
@@ -125,6 +130,38 @@ export const apiClient = {
     }) =>
       apiFetch<Annotation>("/annotations", {
         method: "POST",
+        body:   JSON.stringify(body),
+      }),
+  },
+
+  // ── Ingestion ────────────────────────────────────────────────────────────────
+  ingestion: {
+    syncFdaRecalls: () =>
+      apiFetch<IngestionRun>("/ingestion/sync/fda-recalls", { method: "POST" }),
+
+    syncFda510k: () =>
+      apiFetch<IngestionRun>("/ingestion/sync/fda-510k", { method: "POST" }),
+
+    testGudid: () =>
+      apiFetch<{ ok: boolean; message: string }>("/ingestion/sync/gudid-test", { method: "POST" }),
+
+    testEudamed: () =>
+      apiFetch<{ ok: boolean; message: string; requiresRegistration?: boolean }>("/ingestion/sync/eudamed-test", { method: "POST" }),
+
+    runs: (params?: { page?: number; limit?: number; source?: string }) =>
+      apiFetch<{ data: IngestionRun[]; total: number; page: number; limit: number }>(
+        `/ingestion/runs${buildQs(params ?? {})}`
+      ),
+  },
+
+  // ── Settings ─────────────────────────────────────────────────────────────────
+  settings: {
+    get: () =>
+      apiFetch<TenantDataSources>("/settings"),
+
+    patch: (body: Partial<TenantDataSources>) =>
+      apiFetch<TenantDataSources>("/settings", {
+        method: "PATCH",
         body:   JSON.stringify(body),
       }),
   },

@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { getPresignedDownloadUrl } from "../../lib/s3.js";
+import { lookupByUdi } from "../../lib/gudid-client.js";
 
 const searchQuerySchema = z.object({
   q:            z.string().optional(),
@@ -29,6 +30,17 @@ const createDeviceBodySchema = z.object({
 export const devicesRoutes: FastifyPluginAsync = async (fastify) => {
   // All device routes require authentication
   fastify.addHook("preHandler", fastify.authenticate);
+
+  // ── GET /devices/gudid-lookup — UDI barcode → GUDID device info ─────────────
+  fastify.get<{ Querystring: { udi: string } }>("/gudid-lookup", async (request, reply) => {
+    const udi = String((request.query as any).udi ?? "").trim();
+    if (!udi) return reply.code(400).send({ message: "udi query parameter is required" });
+
+    const device = await lookupByUdi(udi);
+    if (!device) return reply.code(404).send({ message: "UDI not found in GUDID" });
+
+    return device;
+  });
 
   // ── GET /devices/meta — filter metadata (manufacturers + categories) ──────────
   fastify.get("/meta", async () => {

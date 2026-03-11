@@ -30,6 +30,12 @@ const Icon = {
       <path d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />
     </svg>
   ),
+  Settings: () => (
+    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5 shrink-0">
+      <path d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" />
+      <path d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+    </svg>
+  ),
   SignOut: () => (
     <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 shrink-0">
       <path d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9" />
@@ -47,6 +53,7 @@ const navItems = [
   { href: "/dashboard/annotations", label: "Peer Telemetry", Icon: Icon.PeerTelemetry, adminOnly: false },
   { href: "/dashboard/alerts",      label: "Safety Alerts",  Icon: Icon.SafetyAlerts,  adminOnly: false },
   { href: "/dashboard/admin",       label: "Admin",          Icon: Icon.Admin,          adminOnly: true  },
+  { href: "/dashboard/settings",    label: "Settings",       Icon: Icon.Settings,       adminOnly: true  },
 ];
 
 const ROLE_LABELS: Record<string, string> = {
@@ -113,13 +120,15 @@ export function SidebarNav({ user }: SidebarNavProps) {
       }}
     >
       {/* ── Logo ─────────────────────────────────────────────────────────── */}
-      <div
-        className="flex h-16 items-center shrink-0 overflow-hidden"
+      <Link
+        href="/dashboard/devices"
+        aria-label="Go to dashboard"
+        className="flex h-16 items-center shrink-0 overflow-hidden hover:opacity-80 transition-opacity duration-100"
         style={{
           borderBottom: "1px solid rgb(30 30 50)",
           padding:      isCollapsed ? "0 0.75rem" : "0 1.25rem",
           gap:          isCollapsed ? 0 : "0.625rem",
-          transition:   "padding 200ms ease-in-out, gap 200ms ease-in-out",
+          transition:   "padding 200ms ease-in-out, gap 200ms ease-in-out, opacity 100ms ease-in-out",
         }}
       >
         {/* Logo mark — always visible */}
@@ -153,7 +162,7 @@ export function SidebarNav({ user }: SidebarNavProps) {
           <p className="text-sm font-bold leading-none text-white tracking-tight">LogiQo</p>
           <p className="mt-0.5 text-2xs font-medium text-indigo-400 uppercase tracking-widest">MedTech</p>
         </div>
-      </div>
+      </Link>
 
       {/* ── Nav section label ─────────────────────────────────────────────── */}
       {!isCollapsed && (

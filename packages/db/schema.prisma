@@ -345,3 +345,23 @@ model AuditLog {
   @@index([resourceType, resourceId])
   @@map("audit_logs")
 }
+
+// ============================================================
+// INGESTION RUNS — External API sync tracking
+// ============================================================
+
+model IngestionRun {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  source            String
+  status            String    @default("running")
+  recordsIngested   Int       @default(0)  @map("records_ingested")
+  recordsSkipped    Int       @default(0)  @map("records_skipped")
+  errorMessage      String?                @map("error_message")
+  startedAt         DateTime  @default(now()) @map("started_at")
+  completedAt       DateTime?              @map("completed_at")
+  triggeredBy       String    @default("manual") @map("triggered_by")
+  triggeredByUserId String?   @db.Uuid    @map("triggered_by_user_id")
+
+  @@index([source, startedAt(sort: Desc)])
+  @@map("ingestion_runs")
+}

@@ -11,6 +11,8 @@ import { devicesRoutes } from "./modules/devices/routes.js";
 import { alertsRoutes } from "./modules/alerts/routes.js";
 import { adminRoutes } from "./modules/admin/routes.js";
 import { annotationsRoutes } from "./modules/annotations/routes.js";
+import { ingestionRoutes, settingsRoutes } from "./modules/ingestion/routes.js";
+import { startScheduler } from "./jobs/scheduler.js";
 
 const app = Fastify({
   logger: {
@@ -57,9 +59,14 @@ await app.register(devicesRoutes, { prefix: "/devices" });
 await app.register(alertsRoutes, { prefix: "/alerts" });
 await app.register(adminRoutes, { prefix: "/admin" });
 await app.register(annotationsRoutes, { prefix: "/annotations" });
+await app.register(ingestionRoutes, { prefix: "/ingestion" });
+await app.register(settingsRoutes,   { prefix: "/settings" });
 
 // Health check
 app.get("/health", async () => ({ status: "ok", timestamp: new Date().toISOString() }));
+
+// Start background scheduler (checks tenant sync preferences every 5 min)
+startScheduler(app);
 
 const port = Number(process.env.PORT ?? 8080);
 const host = process.env.HOST ?? "0.0.0.0";
