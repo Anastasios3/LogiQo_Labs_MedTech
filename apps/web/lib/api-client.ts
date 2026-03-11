@@ -12,6 +12,47 @@ const API_BASE =
     ? (process.env.INTERNAL_API_URL ?? "http://localhost:8080")
     : "/api/backend";
 
+// ── Typed API error ───────────────────────────────────────────────────────────
+
+/**
+ * Thrown by `apiFetch` for any non-2xx response.
+ *
+ * Preserves `status` and `code` so callers can branch on specific error kinds
+ * without string-matching the message. The most important distinction is
+ * between session-expired 401s and provisioning 401s:
+ *
+ *   - Standard session-expired 401: no `code` field, handled globally by
+ *     Next.js middleware (withMiddlewareAuthRequired) redirecting to login
+ *     before the API call is even made.
+ *
+ *   - USER_NOT_PROVISIONED 401: the user has a valid Auth0 session but our DB
+ *     has no row for them (race between Auth0 callback and /auth/register, or
+ *     a failed registration). Middleware lets this through; components should
+ *     show a "registration incomplete" message rather than redirecting to login.
+ *
+ *   - SUBSCRIPTION_REQUIRED 402: user is authenticated but has no active sub.
+ *
+ * Usage:
+ *   try { await apiClient.users.me() }
+ *   catch (err) {
+ *     if (err instanceof ApiError && err.status === 401 && err.code === "USER_NOT_PROVISIONED") {
+ *       // Show registration-incomplete UI, not a login redirect
+ *     }
+ *   }
+ */
+export class ApiError extends Error {
+  constructor(
+    public readonly status:  number,
+    public readonly code:    string | undefined,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+// ── Core fetch wrapper ────────────────────────────────────────────────────────
+
 async function apiFetch<T>(
   path: string,
   options?: RequestInit
@@ -28,8 +69,16 @@ async function apiFetch<T>(
   });
 
   if (!res.ok) {
-    const error = await res.json().catch(() => ({ message: res.statusText }));
-    throw new Error(error.message ?? `API error ${res.status}`);
+    // Parse error body — our API always sends JSON; fall back to an empty
+    // object if the body is not JSON (e.g. a raw gateway timeout from a proxy).
+    let body: { message?: string; error?: string; code?: string } = {};
+    try {
+      body = await res.json();
+    } catch {
+      // Non-JSON body — body stays {}
+    }
+    const message = body.message ?? body.error ?? res.statusText ?? `API error ${res.status}`;
+    throw new ApiError(res.status, body.code, message);
   }
 
   return res.json();

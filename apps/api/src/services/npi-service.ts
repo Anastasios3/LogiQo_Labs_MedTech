@@ -13,12 +13,26 @@
  * Fastify request dependencies:
  *
  *   audit: (entry) => fastify.audit(request, entry)
+ *
+ * Phase 2 — manual specialty review:
+ *   When taxonomy mismatch detection is hardened (CMS code mapping, not just
+ *   substring matching), callers should gate on result.specialtyMismatch:
+ *
+ *     const result = await promoteUserToNpiVerified(params);
+ *     if (result.specialtyMismatch) {
+ *       // Hold at tier 2-pending, queue for manual clinician review.
+ *       // promoteUserToNpiVerified() has already written to DB and audit;
+ *       // callers only need to add the hold/review-queue step here.
+ *     }
+ *
+ *   The return interface is already stable — adding the branch in Phase 2
+ *   requires no changes to this service's signature or to the other caller.
  */
 import { lookupNpi } from "../lib/nppes.js";
 import type { AuditEntry } from "../plugins/audit.js";
 import type { PrismaClient } from "@logiqo/db";
 
-// ── Typed error ────────────────────────────────────────────────────────────────
+// ── Typed errors ───────────────────────────────────────────────────────────────
 
 /**
  * Thrown when an NPI is not found in the NPPES registry.
@@ -28,6 +42,33 @@ export class NpiNotFoundError extends Error {
   constructor(public readonly npiNumber: string) {
     super(`NPI ${npiNumber} not found in the NPPES registry`);
     this.name = "NpiNotFoundError";
+  }
+}
+
+/**
+ * Defined now for Phase 2 — NOT thrown in Phase 1.
+ *
+ * In Phase 2, when the specialty cross-check is upgraded from a loose
+ * substring match to a precise CMS taxonomy code → specialty enum mapping,
+ * callers that want to block promotion entirely on a mismatch can throw this
+ * from a wrapper or catch it from this service (if the service is updated to
+ * throw rather than warn). Callers that prefer manual-review-hold should
+ * instead rely on `NpiVerificationResult.specialtyMismatch` and never throw.
+ *
+ * The class is exported now so Phase 2 code can `instanceof`-check it without
+ * a source change to this module's public surface.
+ */
+export class SpecialtyMismatchError extends Error {
+  constructor(
+    public readonly npiNumber:  string,
+    public readonly specialty:  string,
+    public readonly taxonomies: string[],
+  ) {
+    super(
+      `NPI ${npiNumber} taxonomy [${taxonomies.join(", ")}] does not match ` +
+      `declared specialty "${specialty}"`
+    );
+    this.name = "SpecialtyMismatchError";
   }
 }
 
@@ -56,6 +97,16 @@ export interface NpiVerificationResult {
   npiNumber:        string;
   npiName:          string | undefined;
   verificationTier: 2;
+  /**
+   * True when the NPPES taxonomy descriptions do not match the user's declared
+   * specialty. Phase 1: user is still promoted (auto-approve) and callers may
+   * log or ignore this flag. Phase 2: callers should check this flag and
+   * conditionally hold the user at tier-2-pending for manual review.
+   *
+   * False when either party is absent — a mismatch is only detectable when
+   * both the user's specialty and the NPI's taxonomy entries are present.
+   */
+  specialtyMismatch: boolean;
 }
 
 // ── Service function ───────────────────────────────────────────────────────────
@@ -79,10 +130,20 @@ export async function promoteUserToNpiVerified(
     throw new NpiNotFoundError(npiNumber);
   }
 
-  // ── 2. Specialty cross-check (warn, don't block — MVP) ────────────────────
-  // NPPES taxonomy descriptions use CMS terminology (e.g. "Internal Medicine").
-  // A loose substring match covers most cases; phase 2 will replace this with
-  // a precise CMS taxonomy code → internal specialty enum mapping.
+  // ── 2. Specialty cross-check ───────────────────────────────────────────────
+  // Phase 1 (MVP): loose substring match on NPPES taxonomy descriptions.
+  // Auto-approves regardless of result; mismatch is surfaced via the
+  // specialtyMismatch flag in the return value so callers can observe it
+  // without this service blocking promotion.
+  //
+  // Phase 2: replace with a precise CMS taxonomy code → internal specialty
+  // enum mapping. At that point, callers should gate on specialtyMismatch to
+  // hold the user at tier-2-pending for manual review (see module JSDoc).
+  //
+  // specialtyMismatch is false when either side is absent — only detectable
+  // when both user.specialty and lookup.taxonomies are populated.
+  let specialtyMismatch = false;
+
   if (user.specialty && lookup.taxonomies?.length) {
     const specialtyLower = user.specialty.toLowerCase();
     const taxonomyMatch  = lookup.taxonomies.some(
@@ -91,6 +152,7 @@ export async function promoteUserToNpiVerified(
         specialtyLower.includes(t.desc.toLowerCase())
     );
     if (!taxonomyMatch) {
+      specialtyMismatch = true;
       log.warn(
         {
           npi:        npiNumber,
@@ -98,7 +160,7 @@ export async function promoteUserToNpiVerified(
           taxonomies: lookup.taxonomies.map(t => t.desc),
         },
         "NPI taxonomy does not match user specialty — auto-approving for MVP " +
-        "(flag for manual review in phase 2)"
+        "(specialtyMismatch=true returned to caller; gate on this flag in phase 2)"
       );
     }
   }
@@ -131,6 +193,7 @@ export async function promoteUserToNpiVerified(
       npiNumber,
       npiName:          lookup.name,
       verificationTier: 2,
+      specialtyMismatch,
     },
   });
 
@@ -138,5 +201,6 @@ export async function promoteUserToNpiVerified(
     npiNumber,
     npiName:          lookup.name,
     verificationTier: 2,
+    specialtyMismatch,
   };
 }
