@@ -9,40 +9,11 @@ import {
   requestNpiVerificationSchema,
   adminSetVerificationTierSchema,
 } from "@logiqo/shared";
-
-/**
- * Validate NPI number against the US NPPES public registry.
- * Returns the name from the registry if valid, null if not found.
- *
- * NPPES NPI Registry API — no key required, rate-limit 1 req/s.
- */
-async function lookupNpi(npi: string): Promise<{ valid: boolean; name?: string }> {
-  try {
-    const url = `https://npiregistry.cms.hhs.gov/api/?number=${npi}&version=2.1`;
-    const res  = await fetch(url, {
-      headers: { "User-Agent": "LogiQo-MedTech/1.0 (contact@logiqo.io)" },
-      signal:  AbortSignal.timeout(8_000),
-    });
-    if (!res.ok) return { valid: false };
-    const data = await res.json() as any;
-    if (!data.results?.length) return { valid: false };
-    const result = data.results[0];
-    // NPPES field priority (v2.1 API):
-    //   1. basic.last_name / basic.first_name      — individual providers (most common)
-    //   2. authorized_official_{last,first}_name   — org's authorised official (fallback)
-    //   3. organization_name                       — organisation name
-    //   4. "Unknown"                               — last resort
-    const name = result.basic?.last_name
-      ? `${result.basic.first_name ?? ""} ${result.basic.last_name}`.trim()
-      : result.basic?.authorized_official_last_name
-        ? `${result.basic.authorized_official_first_name ?? ""} ${result.basic.authorized_official_last_name}`.trim()
-        : result.basic?.organization_name
-          ?? "Unknown";
-    return { valid: true, name };
-  } catch {
-    return { valid: false };
-  }
-}
+import {
+  promoteUserToNpiVerified,
+  NpiNotFoundError,
+  type NpiVerificationResult,
+} from "../../services/npi-service.js";
 
 export const usersRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook("preHandler", fastify.authenticate);
@@ -74,7 +45,16 @@ export const usersRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.patch("/me/verification", async (request, reply) => {
     const user = await fastify.db.user.findUnique({
       where:  { auth0UserId: request.user.sub },
-      select: { id: true, verificationTier: true, email: true },
+      // Include tenantId, role, specialty so the NPI service can run the
+      // specialty cross-check and write a complete audit entry.
+      select: {
+        id:               true,
+        tenantId:         true,
+        email:            true,
+        role:             true,
+        verificationTier: true,
+        specialty:        true,
+      },
     });
     if (!user) return reply.code(404).send({ message: "User not found" });
 
@@ -86,40 +66,40 @@ export const usersRoutes: FastifyPluginAsync = async (fastify) => {
 
     const { npiNumber } = requestNpiVerificationSchema.parse(request.body);
 
-    // Validate against NPPES registry
-    const lookup = await lookupNpi(npiNumber);
-    if (!lookup.valid) {
-      return reply.code(422).send({
-        message: `NPI ${npiNumber} not found in NPPES registry. Verify the number and try again.`,
+    // NPI lookup, specialty cross-check, DB promotion, reputation upsert,
+    // and audit are all delegated to the shared service so this path and
+    // POST /auth/submit-npi produce identical audit entries and DB state.
+    let result: NpiVerificationResult;
+    try {
+      result = await promoteUserToNpiVerified({
+        db:    fastify.db,
+        log:   fastify.log,
+        audit: (entry) => fastify.audit(request, entry),
+        user:  {
+          id:        user.id,
+          tenantId:  user.tenantId,
+          email:     user.email,
+          role:      user.role,
+          specialty: user.specialty,
+        },
+        npiNumber,
       });
+    } catch (err) {
+      if (err instanceof NpiNotFoundError) {
+        return reply.code(422).send({
+          message: `${err.message}. Verify the number and try again.`,
+        });
+      }
+      throw err;
     }
 
-    const updated = await fastify.db.user.update({
-      where:  { id: user.id },
-      data:   {
-        npiNumber,
-        verificationTier:         2,
-        verificationSubmittedAt:  new Date(),
-        verificationApprovedAt:   new Date(),
-      },
-      select: { id: true, verificationTier: true, npiNumber: true },
+    return reply.send({
+      message:          "NPI verified. You are now a tier-2 contributor.",
+      id:               user.id,
+      npiNumber:        result.npiNumber,
+      npiName:          result.npiName,
+      verificationTier: result.verificationTier,
     });
-
-    // Initialise reputation record if missing
-    await fastify.db.userReputation.upsert({
-      where:  { userId: user.id },
-      create: { userId: user.id, totalScore: 0, weeklyScore: 0, monthlyScore: 0 },
-      update: {},
-    });
-
-    await fastify.audit(request, {
-      action:       "user.verification.tier2",
-      resourceType: "user",
-      resourceId:   user.id,
-      newValues:    { verificationTier: 2, npiNumber },
-    });
-
-    return { message: "NPI verified. You are now a tier-2 contributor.", ...updated };
   });
 };
 

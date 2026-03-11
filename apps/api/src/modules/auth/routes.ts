@@ -19,6 +19,11 @@ import {
   signVerificationToken,
   verifyVerificationToken,
 } from "../../lib/jwt-utils.js";
+import {
+  promoteUserToNpiVerified,
+  NpiNotFoundError,
+  type NpiVerificationResult,
+} from "../../services/npi-service.js";
 
 // ── Zod schemas ───────────────────────────────────────────────────────────────
 
@@ -38,6 +43,13 @@ const auth0WebhookSchema = z.object({
       }),
     }),
   }),
+});
+
+const submitNpiSchema = z.object({
+  /** Exactly 10 decimal digits — no dashes, spaces, or letters */
+  npiNumber: z
+    .string()
+    .regex(/^\d{10}$/, "NPI must be exactly 10 digits with no spaces or dashes"),
 });
 
 const registerSchema = z.object({
@@ -337,5 +349,111 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     // ── Step 5: Redirect to onboarding ─────────────────────────────────────────
     const appUrl = process.env.APP_URL ?? "http://localhost:3000";
     return reply.redirect(`${appUrl}/onboarding?step=2&verified=true`);
+  });
+
+  // ── POST /auth/submit-npi ────────────────────────────────────────────────────
+  // Authenticated — requires tier 1 (email verified).
+  //
+  // Flow:
+  //   1. Authenticate via JWT (explicit — this route lives in the public authRoutes plugin)
+  //   2. Guard: user must be tier 1+ and not already tier 2+
+  //   3. Validate NPI format (10 digits)
+  //   4. NPPES registry lookup — confirm NPI exists
+  //   5. Optional specialty cross-check: warn if taxonomy doesn't match, don't block (MVP)
+  //   6. Promote user to tier 2 in DB, stamp timestamps
+  //   7. Upsert reputation record, write audit log
+  //   8. Return { message, npiNumber, npiName, verificationTier }
+  //
+  // NOTE: No subscription gate applies here — NPI submission is part of the
+  //       pre-subscription onboarding path. Only authenticated, email-verified
+  //       users can reach this step.
+  fastify.post("/submit-npi", {
+    config: { rateLimit: { max: 5, timeWindow: "1 minute" } },
+  }, async (request, reply) => {
+    // ── Step 1: Authenticate ────────────────────────────────────────────────────
+    // authRoutes has no global authenticate hook — call explicitly here.
+    await fastify.authenticate(request);
+
+    // ── Step 2: Validate request body ──────────────────────────────────────────
+    let body: z.infer<typeof submitNpiSchema>;
+    try {
+      body = submitNpiSchema.parse(request.body);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return reply.code(400).send({
+          message: "Validation failed",
+          errors:  err.errors.map(e => ({ field: e.path.join("."), message: e.message })),
+        });
+      }
+      throw err;
+    }
+
+    // ── Step 3: Tier guard ─────────────────────────────────────────────────────
+    // Use the JWT claim for a fast check (avoids a DB round-trip on obvious failures).
+    if (request.user.verificationTier < 1) {
+      return reply.code(403).send({
+        message:
+          "Email verification required before NPI submission. " +
+          "Please verify your email first.",
+      });
+    }
+
+    // ── Step 4: Load user from DB (authoritative tier + specialty) ──────────────
+    const dbUser = await fastify.db.user.findUnique({
+      where:  { auth0UserId: request.user.sub },
+      select: {
+        id:               true,
+        tenantId:         true,
+        email:            true,
+        role:             true,
+        verificationTier: true,
+        specialty:        true,
+      },
+    });
+
+    if (!dbUser) return reply.code(404).send({ message: "User not found." });
+
+    // Re-check against DB tier (more authoritative than the JWT claim which
+    // is only refreshed on next login)
+    if (dbUser.verificationTier >= 2) {
+      return reply.code(409).send({
+        message: "NPI already verified. Contact admin for tier-3 promotion.",
+      });
+    }
+
+    // ── Steps 5-8: NPI lookup, specialty cross-check, DB promotion, audit ──────
+    // Delegated to the shared NPI verification service for consistency with
+    // PATCH /users/me/verification — both paths now produce identical audit
+    // entries (action: "user.npi.verified") and identical DB state.
+    let result: NpiVerificationResult;
+    try {
+      result = await promoteUserToNpiVerified({
+        db:    fastify.db,
+        log:   fastify.log,
+        audit: (entry) => fastify.audit(request, entry),
+        user:  {
+          id:        dbUser.id,
+          tenantId:  dbUser.tenantId,
+          email:     dbUser.email,
+          role:      dbUser.role,
+          specialty: dbUser.specialty,
+        },
+        npiNumber: body.npiNumber,
+      });
+    } catch (err) {
+      if (err instanceof NpiNotFoundError) {
+        return reply.code(422).send({
+          message: `${err.message}. Verify the number and try again.`,
+        });
+      }
+      throw err;
+    }
+
+    return reply.code(200).send({
+      message:          "NPI verified. You can now subscribe.",
+      npiNumber:        result.npiNumber,
+      npiName:          result.npiName,
+      verificationTier: result.verificationTier,
+    });
   });
 };

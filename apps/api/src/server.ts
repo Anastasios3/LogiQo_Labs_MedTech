@@ -14,6 +14,7 @@ import { annotationsRoutes } from "./modules/annotations/routes.js";
 import { ingestionRoutes, settingsRoutes } from "./modules/ingestion/routes.js";
 import { usersRoutes, adminUserRoutes } from "./modules/users/routes.js";
 import { authRoutes } from "./modules/auth/routes.js";
+import { subscriptionGatePlugin } from "./plugins/subscription-gate.js";
 import { startScheduler } from "./jobs/scheduler.js";
 
 const app = Fastify({
@@ -55,25 +56,39 @@ await app.register(dbPlugin);
 await app.register(redisPlugin);
 await app.register(authPlugin);
 await app.register(auditPlugin);
+await app.register(subscriptionGatePlugin);
 
-// Public auth routes (registration, email verification — no JWT required)
+// Public auth routes (registration, email verification, NPI submission — no subscription required)
 await app.register(authRoutes, { prefix: "/auth" });
 
-// Route modules (JWT-protected)
-await app.register(devicesRoutes, { prefix: "/devices" });
-await app.register(alertsRoutes, { prefix: "/alerts" });
-await app.register(adminRoutes, { prefix: "/admin" });
-await app.register(annotationsRoutes, { prefix: "/annotations" });
-await app.register(ingestionRoutes, { prefix: "/ingestion" });
-await app.register(settingsRoutes,   { prefix: "/settings" });
-await app.register(usersRoutes,      { prefix: "/users" });
-await app.register(adminUserRoutes,  { prefix: "/admin" });
+// ── Protected routes ─────────────────────────────────────────────────────────
+// All routes registered inside this anonymous scope require:
+//   1. A valid Auth0 JWT (authenticate)
+//   2. An active subscription (checkSubscription)
+//
+// Hooks run in declaration order — authenticate always fires before
+// checkSubscription, so request.user is guaranteed to be populated when
+// the subscription check reads it.
+//
+// system_admin users bypass the subscription gate (see subscription-gate.ts).
+await app.register(async function protectedRoutes(scope) {
+  scope.addHook("preHandler", async (request, reply) => {
+    await scope.authenticate(request);
+    await scope.checkSubscription(request, reply);
+  });
+
+  await scope.register(devicesRoutes,      { prefix: "/devices" });
+  await scope.register(alertsRoutes,       { prefix: "/alerts" });
+  await scope.register(adminRoutes,        { prefix: "/admin" });
+  await scope.register(annotationsRoutes,  { prefix: "/annotations" });
+  await scope.register(ingestionRoutes,    { prefix: "/ingestion" });
+  await scope.register(settingsRoutes,     { prefix: "/settings" });
+  await scope.register(usersRoutes,        { prefix: "/users" });
+  await scope.register(adminUserRoutes,    { prefix: "/admin" });
+});
 
 // Health check
 app.get("/health", async () => ({ status: "ok", timestamp: new Date().toISOString() }));
-
-// Start background scheduler (checks tenant sync preferences every 5 min)
-startScheduler(app);
 
 const port = Number(process.env.PORT ?? 8080);
 const host = process.env.HOST ?? "0.0.0.0";
@@ -81,6 +96,10 @@ const host = process.env.HOST ?? "0.0.0.0";
 try {
   await app.listen({ port, host });
   app.log.info(`API server listening on ${host}:${port}`);
+  // Start the background scheduler only after the server is successfully
+  // listening. If app.listen throws, the scheduler is never started —
+  // preventing orphaned cron jobs from running against an unhealthy process.
+  startScheduler(app);
 } catch (err) {
   app.log.error(err);
   process.exit(1);
