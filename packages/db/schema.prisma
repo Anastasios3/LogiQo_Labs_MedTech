@@ -24,8 +24,24 @@ model Tenant {
   baaDocumentS3 String?
   isActive      Boolean   @default(true)
   settings      Json      @default("{}")
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+
+  // ── Org subscription (synced by Stripe webhook for org plans) ─────────────
+  // Individual plans leave subscriptionStatus = 'none'; the User table carries
+  // the individual subscription. Org plans set this field; the subscription
+  // gate checks either User OR Tenant subscription status depending on plan.
+  subscriptionStatus   String  @default("none") // none | active | past_due | canceled
+  subscriptionTier     String?                   // org_monthly | org_annual
+  stripeCustomerId     String? @unique
+  stripeSubscriptionId String? @unique
+
+  // ── Seat management ───────────────────────────────────────────────────────
+  // maxUsers is set at org plan activation (pulled from Stripe metadata).
+  // activeUserCount is maintained by the invite-acceptance + soft-delete flows.
+  maxUsers        Int @default(20)
+  activeUserCount Int @default(0)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
   users                       User[]
   annotations                 Annotation[]
@@ -33,7 +49,9 @@ model Tenant {
   sops                        Sop[]
   auditLogs                   AuditLog[]
   tenantAlertAcknowledgements TenantAlertAcknowledgement[]
+  invitations                 Invitation[]
 
+  @@index([subscriptionStatus])
   @@map("tenants")
 }
 
@@ -43,7 +61,7 @@ model User {
   auth0UserId      String    @unique
   email            String
   fullName         String
-  role             String    // surgeon | hospital_safety_officer | system_admin | it_procurement
+  role             String    // surgeon | hospital_safety_officer | it_procurement | org_admin | system_admin
   specialty        String?
   npiNumber        String?   @unique
   // Replaces isVerifiedClinician (boolean) — 0-3 verification tier scale:
@@ -62,6 +80,9 @@ model User {
   stripeCustomerId        String?   @unique
   stripeSubscriptionId    String?   @unique
   isActive         Boolean   @default(true)
+  // Soft-delete — set by DELETE /organizations/users/:id (org_admin only).
+  // Hard deletes are never performed to preserve audit trail integrity.
+  deletedAt        DateTime?
   lastLoginAt      DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
@@ -82,9 +103,46 @@ model User {
   tenantAlertAcknowledgements TenantAlertAcknowledgement[] @relation("AcknowledgedBy")
   createdSops                 Sop[]                        @relation("SopCreator")
   approvedSops                Sop[]                        @relation("SopApprover")
+  sentInvitations             Invitation[]                 @relation("InvitationSender")
 
   @@unique([tenantId, email])
   @@map("users")
+}
+
+// ── Organization invitations ──────────────────────────────────────────────────
+// Created by POST /organizations/invite (org_admin only).
+// Accepted via GET /auth/accept-invite?token → POST /auth/register?inviteToken.
+// One active invitation per email per tenant enforced at the application layer
+// (re-invite resets the token and expiresAt on the existing row).
+model Invitation {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String    @db.Uuid
+  invitedById String    @db.Uuid
+
+  email       String
+  // Role the invited user will be assigned on registration.
+  // Can include org_admin — only org admins can create invitations.
+  role        String
+
+  // Cryptographically random UUID used in the invite link; never guessable.
+  // DB generates it so it is always populated, even on direct DB inserts.
+  token       String    @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  // Set by DELETE /organizations/invitations/:id to invalidate before expiry.
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invitedBy User   @relation("InvitationSender", fields: [invitedById], references: [id])
+
+  // One active invite slot per email per tenant — prevents inbox flooding.
+  // Application layer checks this and updates the existing row rather than
+  // creating duplicates.
+  @@unique([tenantId, email])
+  @@index([token])
+  @@map("invitations")
 }
 
 // ── User reputation — cumulative score derived from votes received ────────────

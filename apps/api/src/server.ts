@@ -14,6 +14,7 @@ import { annotationsRoutes } from "./modules/annotations/routes.js";
 import { ingestionRoutes, settingsRoutes } from "./modules/ingestion/routes.js";
 import { usersRoutes, adminUserRoutes } from "./modules/users/routes.js";
 import { authRoutes } from "./modules/auth/routes.js";
+import { organizationsRoutes } from "./modules/organizations/routes.js";
 import { subscribeRoutes } from "./modules/subscribe/routes.js";
 import { stripeWebhookRoutes } from "./modules/webhooks/stripe.js";
 import { subscriptionGatePlugin } from "./plugins/subscription-gate.js";
@@ -87,6 +88,7 @@ await app.register(async function protectedRoutes(scope) {
   await scope.register(settingsRoutes,     { prefix: "/settings" });
   await scope.register(usersRoutes,        { prefix: "/users" });
   await scope.register(adminUserRoutes,    { prefix: "/admin" });
+  await scope.register(organizationsRoutes, { prefix: "/organizations" });
 });
 
 // ── Subscribe routes ─────────────────────────────────────────────────────────

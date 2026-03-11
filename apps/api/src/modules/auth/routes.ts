@@ -62,9 +62,16 @@ const registerSchema = z.object({
   firstName: z.string().min(1, "First name is required").max(100).trim(),
   lastName:  z.string().min(1, "Last name is required").max(100).trim(),
   role: z
-    .enum(["surgeon", "hospital_safety_officer", "it_procurement"])
+    .enum(["surgeon", "hospital_safety_officer", "it_procurement", "org_admin"])
     .default("surgeon"),
-  /** Optional — provide when registering as part of an org invite */
+  /**
+   * UUID token from an organisation invitation email.
+   * When present, the role and tenantId are taken from the invitation row
+   * rather than from the request body and the auto-created personal tenant
+   * path is skipped.
+   */
+  inviteToken:    z.string().uuid("inviteToken must be a UUID").optional(),
+  /** Legacy field — kept for backwards compatibility; inviteToken supersedes this */
   inviteTenantId: z.string().uuid().optional(),
 });
 
@@ -164,9 +171,56 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
 
     // ── 2. Resolve or create tenant ────────────────────────────────────────────
     let tenantId: string;
+    let resolvedRole = body.role;
 
-    if (body.inviteTenantId) {
-      // Org invite path — verify the tenant exists
+    // ── 2a. Org invite path — inviteToken supersedes inviteTenantId ────────────
+    if (body.inviteToken) {
+      const now = new Date();
+      const invitation = await fastify.db.invitation.findUnique({
+        where:  { token: body.inviteToken },
+        select: {
+          id:         true,
+          tenantId:   true,
+          email:      true,
+          role:       true,
+          expiresAt:  true,
+          acceptedAt: true,
+          revokedAt:  true,
+          tenant:     { select: { id: true, isActive: true } },
+        },
+      });
+
+      if (!invitation) {
+        return reply.code(400).send({ message: "Invitation not found. The link may have expired or been revoked.", code: "INVALID_INVITE_TOKEN" });
+      }
+      if (invitation.acceptedAt) {
+        return reply.code(409).send({ message: "This invitation has already been accepted.", code: "INVITATION_ACCEPTED" });
+      }
+      if (invitation.revokedAt) {
+        return reply.code(400).send({ message: "This invitation has been revoked.", code: "INVITATION_REVOKED" });
+      }
+      if (invitation.expiresAt < now) {
+        return reply.code(400).send({ message: "This invitation has expired. Please ask an admin to re-invite you.", code: "INVITATION_EXPIRED" });
+      }
+      if (!invitation.tenant.isActive) {
+        return reply.code(400).send({ message: "The organisation associated with this invitation is no longer active.", code: "TENANT_INACTIVE" });
+      }
+      // Email in the registration body must match the invitation email
+      if (invitation.email !== body.email.toLowerCase()) {
+        return reply.code(400).send({
+          message: `This invitation was sent to ${invitation.email}. Please register with that email address.`,
+          code:    "EMAIL_MISMATCH",
+        });
+      }
+
+      tenantId     = invitation.tenantId;
+      // invitation.role is stored as a plain string in Prisma; we trust the
+      // DB value (written by the invite endpoint which validates the enum) and
+      // cast to the schema union type here.
+      resolvedRole = invitation.role as z.infer<typeof registerSchema>["role"];
+
+    } else if (body.inviteTenantId) {
+      // Legacy invite-tenant path (kept for backwards compat) — verify the tenant exists
       const tenant = await fastify.db.tenant.findUnique({
         where:  { id: body.inviteTenantId },
         select: { id: true, isActive: true },
@@ -200,12 +254,27 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
         tenantId,
         email:           body.email,
         fullName:        `${body.firstName} ${body.lastName}`,
-        role:            body.role,
+        role:            resolvedRole,
         verificationTier: 0,
       },
       update: {}, // idempotent — no-op if already exists (e.g. webhook beat us)
       select: { id: true, email: true, tenantId: true, role: true },
     });
+
+    // ── 3a. Mark invitation accepted + increment tenant seat counter ───────────
+    if (body.inviteToken) {
+      const now = new Date();
+      await fastify.db.$transaction([
+        fastify.db.invitation.update({
+          where: { token: body.inviteToken },
+          data:  { acceptedAt: now },
+        }),
+        fastify.db.tenant.update({
+          where: { id: tenantId },
+          data:  { activeUserCount: { increment: 1 } },
+        }),
+      ]);
+    }
 
     // ── 4. Build signed verification token ────────────────────────────────────
     const secret = process.env.AUTH0_SECRET ?? "dev-secret-change-in-production";
@@ -455,5 +524,68 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       npiName:          result.npiName,
       verificationTier: result.verificationTier,
     });
+  });
+
+  // ── GET /auth/accept-invite?token=<uuid> ──────────────────────────────────────
+  // Public endpoint — no authentication required.
+  //
+  // Validates the invite token before the user reaches the registration form:
+  //   1. Token exists, not expired, not revoked, not already accepted
+  //   2. Redirect to frontend register page with the token embedded in the URL
+  //
+  // This prevents users from landing on a broken registration form (e.g. after
+  // an invitation has been revoked or expired). It also lets the frontend
+  // pre-fill the invited email address via a follow-up lookup if desired.
+  //
+  // The token itself is validated again inside POST /auth/register — this
+  // endpoint is an early-exit guard only, not the authoritative check.
+  fastify.get("/accept-invite", {
+    config: { rateLimit: { max: 20, timeWindow: "1 minute" } },
+  }, async (request, reply) => {
+    const querySchema = z.object({
+      token: z.string().uuid("Token must be a UUID"),
+    });
+
+    let token: string;
+    try {
+      ({ token } = querySchema.parse(request.query));
+    } catch {
+      return reply.code(400).send({ message: "Missing or invalid invite token." });
+    }
+
+    const now        = new Date();
+    const invitation = await fastify.db.invitation.findUnique({
+      where:  { token },
+      select: {
+        id:         true,
+        email:      true,
+        expiresAt:  true,
+        acceptedAt: true,
+        revokedAt:  true,
+        tenant:     { select: { isActive: true } },
+      },
+    });
+
+    const appUrl = process.env.APP_URL ?? "http://localhost:3000";
+
+    if (!invitation) {
+      return reply.redirect(`${appUrl}/register?invite_error=not_found`);
+    }
+    if (invitation.acceptedAt) {
+      return reply.redirect(`${appUrl}/register?invite_error=already_accepted`);
+    }
+    if (invitation.revokedAt) {
+      return reply.redirect(`${appUrl}/register?invite_error=revoked`);
+    }
+    if (invitation.expiresAt < now) {
+      return reply.redirect(`${appUrl}/register?invite_error=expired`);
+    }
+    if (!invitation.tenant.isActive) {
+      return reply.redirect(`${appUrl}/register?invite_error=tenant_inactive`);
+    }
+
+    // Token is valid — redirect to the registration page with the token.
+    // The frontend should read `?invite=<token>` and pass it to POST /auth/register.
+    return reply.redirect(`${appUrl}/register?invite=${token}`);
   });
 };
