@@ -6,6 +6,7 @@ const searchQuerySchema = z.object({
   q:            z.string().optional(),
   category:     z.string().optional(),
   manufacturer: z.string().optional(),
+  status:       z.enum(["approved", "recalled", "pending", "withdrawn"]).optional(),
   page:         z.coerce.number().min(1).default(1),
   limit:        z.coerce.number().min(1).max(100).default(20),
 });
@@ -29,16 +30,29 @@ export const devicesRoutes: FastifyPluginAsync = async (fastify) => {
   // All device routes require authentication
   fastify.addHook("preHandler", fastify.authenticate);
 
+  // ── GET /devices/meta — filter metadata (manufacturers + categories) ──────────
+  fastify.get("/meta", async () => {
+    const [manufacturers, categories] = await Promise.all([
+      fastify.db.manufacturer.findMany({
+        select:  { id: true, name: true, slug: true },
+        orderBy: { name: "asc" },
+      }),
+      fastify.db.deviceCategory.findMany({
+        select:  { id: true, name: true, code: true },
+        orderBy: { name: "asc" },
+      }),
+    ]);
+    return { manufacturers, categories };
+  });
+
   // ── GET /devices — search + list ─────────────────────────────────────────────
   fastify.get("/", async (request) => {
     const query = searchQuerySchema.parse(request.query);
-    const { q, category, manufacturer, page, limit } = query;
+    const { q, category, manufacturer, status, page, limit } = query;
     const offset = (page - 1) * limit;
 
-    // Build where clause — typed loosely so we can add dynamic OR clauses
     const where: Record<string, unknown> = { isActive: true };
 
-    // Full-text search across name, SKU, and description
     if (q) {
       where.OR = [
         { name:        { contains: q, mode: "insensitive" } },
@@ -47,8 +61,9 @@ export const devicesRoutes: FastifyPluginAsync = async (fastify) => {
       ];
     }
 
-    if (category)     where.categoryId  = category;
-    if (manufacturer) where.manufacturer = { slug: manufacturer };
+    if (category)     where.categoryId       = category;
+    if (manufacturer) where.manufacturer     = { slug: manufacturer };
+    if (status)       where.regulatoryStatus = status;
 
     const [devices, total] = await Promise.all([
       fastify.db.device.findMany({
@@ -68,7 +83,7 @@ export const devicesRoutes: FastifyPluginAsync = async (fastify) => {
     await fastify.audit(request, {
       action:       "devices.searched",
       resourceType: "device",
-      newValues:    { query: q, category, manufacturer },
+      newValues:    { query: q, category, manufacturer, status },
     });
 
     return { data: devices, total, page, limit };
@@ -90,7 +105,6 @@ export const devicesRoutes: FastifyPluginAsync = async (fastify) => {
           manufacturerId:      body.manufacturerId,
           categoryId:          body.categoryId,
           regulatoryStatus:    body.regulatoryStatus,
-          // JSONB fields: cast to any — Prisma accepts plain objects for Json columns
           materialComposition: body.materialComposition as any,
           dimensionsMm:        body.dimensionsMm as any,
           sterilizationMethod: body.sterilizationMethod,
@@ -134,7 +148,6 @@ export const devicesRoutes: FastifyPluginAsync = async (fastify) => {
               version:       true,
               mimeType:      true,
               fileSizeBytes: true,
-              // s3Key is NEVER returned to the client
             },
           },
           _count: { select: { annotations: true } },

@@ -2,11 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useState, useEffect, useCallback } from "react";
 
 /* ─── SVG icon set ─────────────────────────────────────────────────────────
-   Inline SVGs keep the bundle lean (no icon library dependency) and allow
-   per-icon aria-hidden so screen readers skip decorative graphics.
-   Source shapes: Heroicons v2 (MIT licence).
+   Inline SVGs — no icon library dependency.  Source: Heroicons v2 (MIT).
 ────────────────────────────────────────────────────────────────────────── */
 const Icon = {
   HardwareIndex: () => (
@@ -36,36 +35,20 @@ const Icon = {
       <path d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9" />
     </svg>
   ),
+  ChevronLeft: () => (
+    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 shrink-0">
+      <path d="m15 18-6-6 6-6" />
+    </svg>
+  ),
 };
 
 const navItems = [
-  {
-    href:      "/dashboard/devices",
-    label:     "Hardware Index",
-    Icon:      Icon.HardwareIndex,
-    adminOnly: false,
-  },
-  {
-    href:      "/dashboard/annotations",
-    label:     "Peer Telemetry",
-    Icon:      Icon.PeerTelemetry,
-    adminOnly: false,
-  },
-  {
-    href:      "/dashboard/alerts",
-    label:     "Safety Alerts",
-    Icon:      Icon.SafetyAlerts,
-    adminOnly: false,
-  },
-  {
-    href:      "/dashboard/admin",
-    label:     "Admin",
-    Icon:      Icon.Admin,
-    adminOnly: true,
-  },
+  { href: "/dashboard/devices",     label: "Hardware Index", Icon: Icon.HardwareIndex, adminOnly: false },
+  { href: "/dashboard/annotations", label: "Peer Telemetry", Icon: Icon.PeerTelemetry, adminOnly: false },
+  { href: "/dashboard/alerts",      label: "Safety Alerts",  Icon: Icon.SafetyAlerts,  adminOnly: false },
+  { href: "/dashboard/admin",       label: "Admin",          Icon: Icon.Admin,          adminOnly: true  },
 ];
 
-/* ─── Role display helpers ─────────────────────────────────────────────────── */
 const ROLE_LABELS: Record<string, string> = {
   surgeon:                 "Surgeon",
   hospital_safety_officer: "Safety Officer",
@@ -75,15 +58,9 @@ const ROLE_LABELS: Record<string, string> = {
 
 function getInitials(name?: string): string {
   if (!name) return "?";
-  return name
-    .split(" ")
-    .map((n) => n[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
+  return name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2);
 }
 
-/* ─── Component ────────────────────────────────────────────────────────────── */
 interface SidebarNavProps {
   user: {
     name?:    string;
@@ -100,123 +77,240 @@ export function SidebarNav({ user }: SidebarNavProps) {
   const initials = getInitials(user.name);
   const roleLabel = role ? (ROLE_LABELS[role] ?? role) : "Guest";
 
+  // ── Collapse state — persisted to localStorage ─────────────────────────────
+  const [collapsed, setCollapsed] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+    try {
+      const stored = localStorage.getItem("sidebar-collapsed");
+      if (stored === "true") setCollapsed(true);
+    } catch {/* SSR / private browsing */}
+  }, []);
+
+  const toggleCollapsed = useCallback(() => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try { localStorage.setItem("sidebar-collapsed", String(next)); } catch {/* ignore */}
+      return next;
+    });
+  }, []);
+
+  // Avoid hydration flash — render expanded until mounted
+  const isCollapsed = mounted && collapsed;
+
   return (
-    /* Dark sidebar — better contrast vs bright content area (Refactoring UI: use
-       color to establish visual hierarchy between chrome and content) */
     <nav
       aria-label="Main navigation"
-      className="flex h-full w-64 shrink-0 flex-col"
-      style={{ background: "rgb(15 15 26)", borderRight: "1px solid rgb(30 30 50)" }}
+      className="flex h-full flex-col shrink-0 overflow-hidden"
+      style={{
+        background:    "rgb(15 15 26)",
+        borderRight:   "1px solid rgb(30 30 50)",
+        width:         isCollapsed ? "4rem" : "16rem",
+        transition:    "width 200ms ease-in-out",
+        minWidth:      isCollapsed ? "4rem" : "16rem",
+      }}
     >
       {/* ── Logo ─────────────────────────────────────────────────────────── */}
-      <div className="flex h-16 items-center gap-2.5 px-5 shrink-0"
-           style={{ borderBottom: "1px solid rgb(30 30 50)" }}>
-        {/* Medical cross mark */}
+      <div
+        className="flex h-16 items-center shrink-0 overflow-hidden"
+        style={{
+          borderBottom: "1px solid rgb(30 30 50)",
+          padding:      isCollapsed ? "0 0.75rem" : "0 1.25rem",
+          gap:          isCollapsed ? 0 : "0.625rem",
+          transition:   "padding 200ms ease-in-out, gap 200ms ease-in-out",
+        }}
+      >
+        {/* Logo mark — always visible */}
         <span
           aria-hidden="true"
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
-          style={{ background: "rgb(79 70 229)" }}
+          className="flex shrink-0 items-center justify-center rounded-lg overflow-hidden"
+          style={{ width: "2rem", height: "2rem", background: "rgb(15 15 26)", flexShrink: 0 }}
         >
-          <svg viewBox="0 0 20 20" fill="white" className="h-4 w-4">
-            <path d="M12 3a1 1 0 0 0-1-1H9a1 1 0 0 0-1 1v3H5a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h3v3a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-3h3a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1h-3V3Z" />
-          </svg>
+          {/* Real LogiQo logo — white on dark sidebar */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/logiqo-logo.svg"
+            alt="LogiQo"
+            width={28}
+            height={28}
+            style={{ filter: "brightness(0) invert(1)", objectFit: "contain" }}
+          />
         </span>
-        <div className="min-w-0">
+
+        {/* Wordmark — hidden when collapsed */}
+        <div
+          className="min-w-0 overflow-hidden"
+          style={{
+            opacity:    isCollapsed ? 0 : 1,
+            width:      isCollapsed ? 0 : "auto",
+            transition: "opacity 150ms ease-in-out, width 200ms ease-in-out",
+            whiteSpace: "nowrap",
+          }}
+          aria-hidden={isCollapsed}
+        >
           <p className="text-sm font-bold leading-none text-white tracking-tight">LogiQo</p>
           <p className="mt-0.5 text-2xs font-medium text-indigo-400 uppercase tracking-widest">MedTech</p>
         </div>
       </div>
 
       {/* ── Nav section label ─────────────────────────────────────────────── */}
-      <div className="px-5 pt-5 pb-1.5">
-        <p className="text-2xs font-semibold uppercase tracking-widest"
-           style={{ color: "rgb(100 110 160)" }}>
-          Platform
-        </p>
-      </div>
+      {!isCollapsed && (
+        <div className="px-5 pt-5 pb-1.5 overflow-hidden">
+          <p className="text-2xs font-semibold uppercase tracking-widest whitespace-nowrap"
+             style={{ color: "rgb(100 110 160)" }}>
+            Platform
+          </p>
+        </div>
+      )}
 
       {/* ── Nav links ─────────────────────────────────────────────────────── */}
-      <div className="flex-1 space-y-0.5 px-3 overflow-y-auto scrollbar-thin">
-        {navItems
-          .filter((item) => !item.adminOnly || isAdmin)
-          .map((item) => {
-            const isActive = pathname.startsWith(item.href);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                /* aria-current="page" is the correct attribute for the active nav link
-                   (Inclusive Components: Navigation pattern) */
-                aria-current={isActive ? "page" : undefined}
-                className={[
-                  "group flex items-center gap-3 rounded-lg px-3 py-2.5",
-                  "text-sm font-medium transition-all duration-100",
-                  isActive
-                    ? "bg-white/10 text-white"
-                    : "text-slate-400 hover:bg-white/5 hover:text-white",
-                ].join(" ")}
-              >
-                {/* Active indicator bar */}
-                <span
-                  aria-hidden="true"
+      <div
+        className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin"
+        style={{
+          padding:    isCollapsed ? "0.75rem 0.5rem" : "0.375rem 0.75rem",
+          paddingTop: isCollapsed ? "1rem" : "0.375rem",
+          transition: "padding 200ms ease-in-out",
+        }}
+      >
+        <div className="space-y-0.5">
+          {navItems
+            .filter((item) => !item.adminOnly || isAdmin)
+            .map((item) => {
+              const isActive = pathname.startsWith(item.href);
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  aria-current={isActive ? "page" : undefined}
+                  title={isCollapsed ? item.label : undefined}
                   className={[
-                    "absolute left-0 ml-1 h-6 w-1 rounded-r-full bg-brand-500",
-                    "transition-opacity duration-100",
-                    isActive ? "opacity-100" : "opacity-0 group-hover:opacity-30",
+                    "group relative flex items-center rounded-lg",
+                    "text-sm font-medium transition-all duration-100",
+                    isCollapsed ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2.5",
+                    isActive
+                      ? "bg-white/10 text-white"
+                      : "text-slate-400 hover:bg-white/5 hover:text-white",
                   ].join(" ")}
-                  style={{ position: "absolute" }}
-                />
-                <item.Icon />
-                {item.label}
-              </Link>
-            );
-          })}
+                >
+                  {/* Active indicator bar */}
+                  <span
+                    aria-hidden="true"
+                    className={[
+                      "absolute left-0 ml-1 h-6 w-1 rounded-r-full bg-indigo-500",
+                      "transition-opacity duration-100",
+                      isActive ? "opacity-100" : "opacity-0 group-hover:opacity-30",
+                    ].join(" ")}
+                  />
+                  <item.Icon />
+                  {/* Label — hidden when collapsed */}
+                  {!isCollapsed && (
+                    <span className="overflow-hidden whitespace-nowrap">{item.label}</span>
+                  )}
+                </Link>
+              );
+            })}
+        </div>
       </div>
 
       {/* ── User footer ───────────────────────────────────────────────────── */}
-      <div className="shrink-0 p-3" style={{ borderTop: "1px solid rgb(30 30 50)" }}>
-        <div className="flex items-center gap-3 rounded-lg p-2.5">
-          {/* Avatar — image with initials fallback (Inclusive Components: graceful degradation) */}
+      <div
+        className="shrink-0 overflow-hidden"
+        style={{
+          borderTop: "1px solid rgb(30 30 50)",
+          padding:   isCollapsed ? "0.75rem 0.5rem" : "0.75rem",
+          transition: "padding 200ms ease-in-out",
+        }}
+      >
+        {/* Avatar + info */}
+        <div
+          className="flex items-center rounded-lg"
+          style={{
+            gap:     isCollapsed ? 0 : "0.75rem",
+            padding: "0.5rem 0.625rem",
+            justifyContent: isCollapsed ? "center" : "flex-start",
+          }}
+        >
           {user.picture ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={user.picture}
               alt={user.name ?? "User avatar"}
-              className="h-9 w-9 shrink-0 rounded-full ring-2"
-              style={{ outline: "2px solid rgb(30 30 50)", outlineOffset: "0px" }}
+              className="h-8 w-8 shrink-0 rounded-full"
+              style={{ outline: "2px solid rgb(50 50 80)", outlineOffset: "0px" }}
             />
           ) : (
             <span
               aria-hidden="true"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full
                          bg-indigo-600 text-xs font-bold text-white select-none"
             >
               {initials}
             </span>
           )}
 
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold text-white leading-tight">
-              {user.name ?? user.email ?? "User"}
-            </p>
-            <p className="truncate text-2xs font-medium mt-0.5" style={{ color: "rgb(130 140 200)" }}>
-              {roleLabel}
-            </p>
-          </div>
+          {/* Name + role — hidden when collapsed */}
+          {!isCollapsed && (
+            <div className="min-w-0 flex-1 overflow-hidden">
+              <p className="truncate text-sm font-semibold text-white leading-tight whitespace-nowrap">
+                {user.name ?? user.email ?? "User"}
+              </p>
+              <p className="truncate text-2xs font-medium mt-0.5 whitespace-nowrap"
+                 style={{ color: "rgb(130 140 200)" }}>
+                {roleLabel}
+              </p>
+            </div>
+          )}
         </div>
 
-        {/* Sign out — use a full button with icon for better affordance */}
-        <Link
-          href="/api/auth/logout"
-          className="mt-1 flex w-full items-center justify-center gap-2
-                     rounded-lg px-3 py-2
-                     text-xs font-medium
-                     text-slate-500 hover:bg-white/5 hover:text-slate-300
+        {/* Sign out */}
+        {!isCollapsed ? (
+          <Link
+            href="/api/auth/logout"
+            className="mt-1 flex w-full items-center justify-center gap-2
+                       rounded-lg px-3 py-1.5
+                       text-xs font-medium
+                       text-slate-500 hover:bg-white/5 hover:text-slate-300
+                       transition-colors duration-100"
+          >
+            <Icon.SignOut />
+            Sign out
+          </Link>
+        ) : (
+          <Link
+            href="/api/auth/logout"
+            title="Sign out"
+            className="mt-1 flex w-full items-center justify-center rounded-lg py-1.5
+                       text-slate-500 hover:bg-white/5 hover:text-slate-300
+                       transition-colors duration-100"
+          >
+            <Icon.SignOut />
+          </Link>
+        )}
+
+        {/* Collapse toggle */}
+        <button
+          onClick={toggleCollapsed}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className="mt-2 flex w-full items-center justify-center rounded-lg py-1.5
+                     text-slate-600 hover:bg-white/5 hover:text-slate-400
                      transition-colors duration-100"
         >
-          <Icon.SignOut />
-          Sign out
-        </Link>
+          <span
+            style={{
+              display:   "flex",
+              transform: isCollapsed ? "rotate(180deg)" : "rotate(0deg)",
+              transition: "transform 200ms ease-in-out",
+            }}
+          >
+            <Icon.ChevronLeft />
+          </span>
+          {!isCollapsed && (
+            <span className="ml-2 text-xs font-medium whitespace-nowrap">Collapse</span>
+          )}
+        </button>
       </div>
     </nav>
   );

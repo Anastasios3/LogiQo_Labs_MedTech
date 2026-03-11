@@ -1,6 +1,8 @@
+import Link from "next/link";
 import { apiClient } from "@/lib/api-client";
 import type { Device, AuditLog } from "@logiqo/shared";
 import type { AdminStats } from "@/lib/api-client";
+import { AddDeviceForm } from "@/components/admin/add-device-form";
 
 export const metadata = {
   title: "Admin Dashboard | LogiQo MedTech",
@@ -17,8 +19,6 @@ function formatTimestamp(ts: string): string {
   });
 }
 
-// Action badge — colour-codes event types for fast scanning
-// (Refactoring UI: use color intentionally to communicate meaning)
 function ActionBadge({ action }: { action: string }) {
   const [domain, verb] = action.split(".");
   const colors: Record<string, string> = {
@@ -41,7 +41,6 @@ function ActionBadge({ action }: { action: string }) {
   );
 }
 
-// Stat card
 function StatCard({
   label, value, sub, accent,
 }: {
@@ -58,11 +57,11 @@ function StatCard({
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default async function AdminPage() {
-  // Fetch all data in parallel — graceful fallback on API unavailable
-  const [statsResult, pendingResult, logsResult] = await Promise.allSettled([
+  const [statsResult, pendingResult, logsResult, metaResult] = await Promise.allSettled([
     apiClient.admin.stats(),
     apiClient.admin.pendingDevices({ limit: 20 }),
     apiClient.admin.auditLogs({ limit: 50 }),
+    apiClient.devices.meta(),
   ]);
 
   const stats: AdminStats = statsResult.status === "fulfilled"
@@ -76,6 +75,10 @@ export default async function AdminPage() {
   const auditLogs: AuditLog[] = logsResult.status === "fulfilled"
     ? logsResult.value.data
     : [];
+
+  const meta = metaResult.status === "fulfilled"
+    ? metaResult.value
+    : { manufacturers: [], categories: [] };
 
   const apiDown = statsResult.status === "rejected";
 
@@ -127,6 +130,11 @@ export default async function AdminPage() {
         />
       </div>
 
+      {/* ── Add New Device (collapsible) ────────────────────────────────────── */}
+      <section aria-labelledby="add-device-heading">
+        <AddDeviceForm manufacturers={meta.manufacturers} categories={meta.categories} />
+      </section>
+
       {/* ── Pending Approvals ──────────────────────────────────────────────── */}
       <section aria-labelledby="pending-heading">
         <h2 id="pending-heading" className="mb-4">
@@ -166,32 +174,17 @@ export default async function AdminPage() {
                         </time>
                       </td>
                       <td>
-                        {/* Action buttons — Inclusive Components: descriptive labels */}
-                        <div className="flex items-center justify-end gap-2">
-                          <form action={`/api/admin/devices/${device.id}/approve`} method="post">
-                            <button
-                              type="submit"
-                              className="btn-primary text-xs px-3 py-1.5"
-                              aria-label={`Approve ${device.name}`}
-                            >
-                              <svg aria-hidden="true" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                              </svg>
-                              Approve
-                            </button>
-                          </form>
-                          <form action={`/api/admin/devices/${device.id}/reject`} method="post">
-                            <button
-                              type="submit"
-                              className="btn-danger text-xs px-3 py-1.5"
-                              aria-label={`Reject ${device.name}`}
-                            >
-                              <svg aria-hidden="true" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-                              </svg>
-                              Reject
-                            </button>
-                          </form>
+                        <div className="flex items-center justify-end">
+                          <Link
+                            href={`/dashboard/admin/devices/${device.id}`}
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 transition-colors"
+                          >
+                            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.964-7.178Z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+                            </svg>
+                            Review
+                          </Link>
                         </div>
                       </td>
                     </tr>

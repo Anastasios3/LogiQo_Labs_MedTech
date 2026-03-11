@@ -12,7 +12,6 @@ async function apiFetch<T>(
       "Content-Type": "application/json",
       ...options?.headers,
     },
-    // Don't cache API responses — always fresh data
     cache: "no-store",
   });
 
@@ -24,7 +23,6 @@ async function apiFetch<T>(
   return res.json();
 }
 
-/** Helpers for query-string building — filters out null/undefined */
 function buildQs(params: Record<string, string | number | boolean | undefined | null>): string {
   const qs = new URLSearchParams(
     Object.entries(params)
@@ -35,10 +33,15 @@ function buildQs(params: Record<string, string | number | boolean | undefined | 
 }
 
 export interface AdminStats {
-  pendingDevices:  number;
+  pendingDevices:   number;
   auditEventsToday: number;
-  activeDevices:   number;
-  activeAlerts:    number;
+  activeDevices:    number;
+  activeAlerts:     number;
+}
+
+export interface DeviceMeta {
+  manufacturers: { id: string; name: string; slug: string }[];
+  categories:    { id: string; name: string; code: string }[];
 }
 
 export const apiClient = {
@@ -48,6 +51,7 @@ export const apiClient = {
       q?: string;
       category?: string;
       manufacturer?: string;
+      status?: string;
       page?: number;
       limit?: number;
     }) =>
@@ -55,6 +59,26 @@ export const apiClient = {
 
     getById: (id: string) =>
       apiFetch<Device>(`/devices/${id}`),
+
+    meta: () =>
+      apiFetch<DeviceMeta>("/devices/meta"),
+
+    create: (body: {
+      sku:                 string;
+      name:                string;
+      manufacturerId:      string;
+      categoryId:          string;
+      description?:        string;
+      modelNumber?:        string;
+      regulatoryStatus?:   string;
+      sterilizationMethod?: string;
+      fdA510kNumber?:      string;
+      ceMmarkNumber?:      string;
+    }) =>
+      apiFetch<Device>("/devices", {
+        method: "POST",
+        body:   JSON.stringify(body),
+      }),
 
     getDocumentUrl: (deviceId: string, documentId: string) =>
       apiFetch<{ url: string; expiresAt: string }>(
@@ -78,7 +102,6 @@ export const apiClient = {
 
   // ── Annotations ───────────────────────────────────────────────────────────────
   annotations: {
-    /** Platform-wide feed (no deviceId = all visible annotations) */
     list: (params?: { deviceId?: string; page?: number; limit?: number }) =>
       apiFetch<{ data: Annotation[]; total: number; page: number; limit: number }>(
         `/annotations${buildQs(params ?? {})}`
