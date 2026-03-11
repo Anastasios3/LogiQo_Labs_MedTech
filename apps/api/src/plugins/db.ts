@@ -7,7 +7,7 @@ declare module "fastify" {
     db: PrismaClient;
     /**
      * Run a callback inside a PostgreSQL transaction with the RLS tenant
-     * context pre-set via `SET LOCAL app.current_tenant_id = <tenantId>`.
+     * context pre-set via `set_config('app.current_tenant_id', tenantId, true)`.
      *
      * All tenant-scoped Prisma queries MUST go through this helper so that
      * the Row-Level Security policies on annotations, comments, users, etc.
@@ -54,9 +54,12 @@ const dbPluginImpl: FastifyPluginAsync = async (fastify) => {
     "withTenant",
     <T>(tenantId: string, fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> => {
       return prisma.$transaction(async (tx) => {
-        // SET LOCAL means the value reverts at the end of this transaction,
-        // preventing tenant context leakage between requests on pooled connections.
-        await tx.$executeRaw`SET LOCAL app.current_tenant_id = ${tenantId}`;
+        // Use set_config() instead of SET LOCAL — PostgreSQL's SET command does
+        // not accept parameterized values ($1), but set_config() is a regular
+        // SQL function that does. The third argument `true` means "transaction-local"
+        // (equivalent to SET LOCAL), so the value reverts at the end of this
+        // transaction, preventing tenant context leakage on pooled connections.
+        await tx.$executeRaw`SELECT set_config('app.current_tenant_id', ${tenantId}, true)`;
         return fn(tx);
       });
     }
