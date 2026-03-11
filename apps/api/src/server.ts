@@ -14,6 +14,8 @@ import { annotationsRoutes } from "./modules/annotations/routes.js";
 import { ingestionRoutes, settingsRoutes } from "./modules/ingestion/routes.js";
 import { usersRoutes, adminUserRoutes } from "./modules/users/routes.js";
 import { authRoutes } from "./modules/auth/routes.js";
+import { subscribeRoutes } from "./modules/subscribe/routes.js";
+import { stripeWebhookRoutes } from "./modules/webhooks/stripe.js";
 import { subscriptionGatePlugin } from "./plugins/subscription-gate.js";
 import { startScheduler } from "./jobs/scheduler.js";
 
@@ -86,6 +88,20 @@ await app.register(async function protectedRoutes(scope) {
   await scope.register(usersRoutes,        { prefix: "/users" });
   await scope.register(adminUserRoutes,    { prefix: "/admin" });
 });
+
+// ── Subscribe routes ─────────────────────────────────────────────────────────
+// Registered OUTSIDE the subscription gate intentionally:
+//   /subscribe/checkout — user may not yet have an active subscription
+//   /subscribe/portal   — subscription check is done inline (stripeCustomerId guard)
+// Each handler calls fastify.authenticate() explicitly.
+await app.register(subscribeRoutes, { prefix: "/subscribe" });
+
+// ── Stripe webhook ────────────────────────────────────────────────────────────
+// No Auth0 auth — Stripe HMAC signature is verified inside the handler.
+// The plugin is NOT wrapped with fastify-plugin, so its scoped
+// application/json content-type parser (returns raw Buffer for signature
+// verification) does not bleed into the rest of the application.
+await app.register(stripeWebhookRoutes, { prefix: "/webhooks" });
 
 // Health check
 app.get("/health", async () => ({ status: "ok", timestamp: new Date().toISOString() }));

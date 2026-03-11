@@ -1,0 +1,34 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@logiqo/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@logiqo/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      stripe:
+        specifier: ^20.4.1
+        version: 20.4.1
+
+packages:
+
+  stripe@20.4.1:
+    resolution: {integrity: sha512-axCguHItc8Sxt0HC6aSkdVRPffjYPV7EQqZRb2GkIa8FzWDycE7nHJM19C6xAIynH1Qp1/BHiopSi96jGBxT0w==}
+    engines: {node: '>=16'}
+    peerDependencies:
+      '@types/node': '>=16'
+    peerDependenciesMeta:
+      '@types/node':
+        optional: true
+
+snapshots:
+
+  stripe@20.4.1: {}
