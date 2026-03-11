@@ -44,6 +44,10 @@ export interface Device {
   manufacturer?: Pick<Manufacturer, "id" | "name" | "slug"> | null;
   category?: Pick<DeviceCategory, "id" | "name"> | null;
   documents?: DeviceDocument[];
+  /** Prisma aggregate counts — included in list and detail responses */
+  _count?: {
+    annotations: number;
+  };
   createdAt: string;
   updatedAt: string;
 }

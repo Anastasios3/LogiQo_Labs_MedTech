@@ -26,6 +26,7 @@
     "pino": "^9.0.0",
     "pino-pretty": "^11.0.0",
     "fastify-plugin": "^4.5.0",
+    "dotenv": "^16.4.0",
     "@logiqo/shared": "workspace:*",
     "@logiqo/db": "workspace:*"
   },

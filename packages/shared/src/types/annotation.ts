@@ -26,6 +26,16 @@ export interface Annotation {
     id: string;
     fullName: string;
     specialty?: string | null;
+  } | null;
+  /** Device info — included when fetching annotation feeds */
+  device?: {
+    id: string;
+    name: string;
+    sku: string;
+  } | null;
+  /** Prisma aggregate count for endorsements */
+  _count?: {
+    annotationEndorsements: number;
   };
   endorsementCount?: number;
   createdAt: string;

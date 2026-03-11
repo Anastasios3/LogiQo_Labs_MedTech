@@ -3,58 +3,120 @@ import { z } from "zod";
 import { getPresignedDownloadUrl } from "../../lib/s3.js";
 
 const searchQuerySchema = z.object({
-  q: z.string().optional(),
-  category: z.string().optional(),
+  q:            z.string().optional(),
+  category:     z.string().optional(),
   manufacturer: z.string().optional(),
-  page: z.coerce.number().min(1).default(1),
-  limit: z.coerce.number().min(1).max(100).default(20),
+  page:         z.coerce.number().min(1).default(1),
+  limit:        z.coerce.number().min(1).max(100).default(20),
+});
+
+const createDeviceBodySchema = z.object({
+  sku:                 z.string().min(1).max(100).trim(),
+  name:                z.string().min(2).max(300).trim(),
+  description:         z.string().max(5000).trim().optional(),
+  modelNumber:         z.string().max(100).trim().optional(),
+  manufacturerId:      z.string().uuid("Invalid manufacturer ID"),
+  categoryId:          z.string().uuid("Invalid category ID"),
+  regulatoryStatus:    z.enum(["approved", "recalled", "pending", "withdrawn"]).default("pending"),
+  materialComposition: z.record(z.unknown()).optional(),
+  dimensionsMm:        z.record(z.unknown()).optional(),
+  sterilizationMethod: z.string().max(200).trim().optional(),
+  fdA510kNumber:       z.string().max(100).trim().optional(),
+  ceMmarkNumber:       z.string().max(100).trim().optional(),
 });
 
 export const devicesRoutes: FastifyPluginAsync = async (fastify) => {
   // All device routes require authentication
   fastify.addHook("preHandler", fastify.authenticate);
 
-  // GET /devices — search and list
+  // ── GET /devices — search + list ─────────────────────────────────────────────
   fastify.get("/", async (request) => {
     const query = searchQuerySchema.parse(request.query);
     const { q, category, manufacturer, page, limit } = query;
     const offset = (page - 1) * limit;
 
-    // Build PostgreSQL full-text search via Prisma raw query for MVP
-    const whereClause: Record<string, unknown> = {
-      isActive: true,
-    };
+    // Build where clause — typed loosely so we can add dynamic OR clauses
+    const where: Record<string, unknown> = { isActive: true };
 
-    if (category) whereClause.categoryId = category;
-
-    if (manufacturer) {
-      whereClause.manufacturer = { slug: manufacturer };
+    // Full-text search across name, SKU, and description
+    if (q) {
+      where.OR = [
+        { name:        { contains: q, mode: "insensitive" } },
+        { sku:         { contains: q, mode: "insensitive" } },
+        { description: { contains: q, mode: "insensitive" } },
+      ];
     }
+
+    if (category)     where.categoryId  = category;
+    if (manufacturer) where.manufacturer = { slug: manufacturer };
 
     const [devices, total] = await Promise.all([
       fastify.db.device.findMany({
-        where: whereClause,
+        where: where as any,
         include: {
           manufacturer: { select: { id: true, name: true, slug: true } },
-          category: { select: { id: true, name: true } },
+          category:     { select: { id: true, name: true } },
+          _count:       { select: { annotations: true } },
         },
-        skip: offset,
-        take: limit,
-        orderBy: q ? undefined : { createdAt: "desc" },
+        skip:    offset,
+        take:    limit,
+        orderBy: { createdAt: "desc" },
       }),
-      fastify.db.device.count({ where: whereClause }),
+      fastify.db.device.count({ where: where as any }),
     ]);
 
     await fastify.audit(request, {
-      action: "devices.searched",
+      action:       "devices.searched",
       resourceType: "device",
-      newValues: { query: q, category, manufacturer },
+      newValues:    { query: q, category, manufacturer },
     });
 
     return { data: devices, total, page, limit };
   });
 
-  // GET /devices/:id — device detail
+  // ── POST /devices — system admin: add device to index ────────────────────────
+  fastify.post(
+    "/",
+    { preHandler: fastify.requireRole("system_admin") },
+    async (request, reply) => {
+      const body = createDeviceBodySchema.parse(request.body);
+
+      const device = await fastify.db.device.create({
+        data: {
+          sku:                 body.sku,
+          name:                body.name,
+          description:         body.description,
+          modelNumber:         body.modelNumber,
+          manufacturerId:      body.manufacturerId,
+          categoryId:          body.categoryId,
+          regulatoryStatus:    body.regulatoryStatus,
+          // JSONB fields: cast to any — Prisma accepts plain objects for Json columns
+          materialComposition: body.materialComposition as any,
+          dimensionsMm:        body.dimensionsMm as any,
+          sterilizationMethod: body.sterilizationMethod,
+          fdA510kNumber:       body.fdA510kNumber,
+          ceMmarkNumber:       body.ceMmarkNumber,
+          approvalStatus:      "pending",
+          isActive:            true,
+        },
+        include: {
+          manufacturer: { select: { id: true, name: true, slug: true } },
+          category:     { select: { id: true, name: true } },
+        },
+      });
+
+      await fastify.audit(request, {
+        action:       "device.created",
+        resourceType: "device",
+        resourceId:   device.id,
+        newValues:    { sku: body.sku, name: body.name },
+      });
+
+      return reply.code(201).send(device);
+    }
+  );
+
+  // ── GET /devices/:id — device detail ─────────────────────────────────────────
   fastify.get<{ Params: { id: string } }>(
     "/:id",
     async (request, reply) => {
@@ -62,41 +124,42 @@ export const devicesRoutes: FastifyPluginAsync = async (fastify) => {
         where: { id: request.params.id, isActive: true },
         include: {
           manufacturer: true,
-          category: true,
+          category:     true,
           documents: {
-            where: { isCurrent: true },
+            where:  { isCurrent: true },
             select: {
-              id: true,
-              title: true,
-              documentType: true,
-              version: true,
-              mimeType: true,
+              id:            true,
+              title:         true,
+              documentType:  true,
+              version:       true,
+              mimeType:      true,
               fileSizeBytes: true,
-              // Never return the s3Key directly
+              // s3Key is NEVER returned to the client
             },
           },
+          _count: { select: { annotations: true } },
         },
       });
 
       if (!device) return reply.code(404).send({ message: "Device not found" });
 
       await fastify.audit(request, {
-        action: "device.viewed",
+        action:       "device.viewed",
         resourceType: "device",
-        resourceId: device.id,
+        resourceId:   device.id,
       });
 
       return device;
     }
   );
 
-  // GET /devices/:id/documents/:documentId/url — pre-signed download URL
+  // ── GET /devices/:id/documents/:documentId/url — pre-signed download URL ─────
   fastify.get<{ Params: { id: string; documentId: string } }>(
     "/:id/documents/:documentId/url",
     async (request, reply) => {
       const doc = await fastify.db.deviceDocument.findFirst({
         where: {
-          id: request.params.documentId,
+          id:       request.params.documentId,
           deviceId: request.params.id,
         },
         select: { id: true, s3Key: true, title: true },
@@ -104,14 +167,14 @@ export const devicesRoutes: FastifyPluginAsync = async (fastify) => {
 
       if (!doc) return reply.code(404).send({ message: "Document not found" });
 
-      const url = await getPresignedDownloadUrl(doc.s3Key);
+      const url       = await getPresignedDownloadUrl(doc.s3Key);
       const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
 
       await fastify.audit(request, {
-        action: "document.downloaded",
+        action:       "document.downloaded",
         resourceType: "device_document",
-        resourceId: doc.id,
-        newValues: { documentTitle: doc.title },
+        resourceId:   doc.id,
+        newValues:    { documentTitle: doc.title },
       });
 
       return { url, expiresAt };

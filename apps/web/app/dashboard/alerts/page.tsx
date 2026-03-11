@@ -1,78 +1,53 @@
+import { apiClient } from "@/lib/api-client";
+import type { Alert } from "@logiqo/shared";
+
 export const metadata = {
   title: "Safety Alerts | LogiQo MedTech",
 };
 
-/* ─── Severity configuration ─────────────────────────────────────────────────
-   Refactoring UI: each severity has its own color + icon + ARIA role.
-   Inclusive Components: role="alert" for high-priority, role="status" for info.
-────────────────────────────────────────────────────────────────────────── */
+// ── Severity configuration ────────────────────────────────────────────────────
+// Refactoring UI: each severity has color + icon + ARIA role.
+// Inclusive Components: role="alert" for high-priority, role="status" for info.
 const SEVERITY_CONFIG = {
+  critical: {
+    badge:     "badge-critical",
+    bar:       "bg-red-600",
+    role:      "alert" as const,
+  },
   high: {
-    badge:      "badge-high",
-    bar:        "bg-orange-500",
-    bg:         "bg-orange-50",
-    border:     "border-orange-200",
-    iconColor:  "text-orange-500",
-    role:       "alert" as const,   // announces immediately to screen readers
+    badge:     "badge-high",
+    bar:       "bg-orange-500",
+    role:      "alert" as const,
   },
   medium: {
-    badge:      "badge-medium",
-    bar:        "bg-amber-400",
-    bg:         "bg-amber-50",
-    border:     "border-amber-200",
-    iconColor:  "text-amber-500",
-    role:       "status" as const,
+    badge:     "badge-medium",
+    bar:       "bg-amber-400",
+    role:      "status" as const,
   },
   low: {
-    badge:      "badge-low",
-    bar:        "bg-green-500",
-    bg:         "bg-green-50",
-    border:     "border-green-200",
-    iconColor:  "text-green-600",
-    role:       "status" as const,
+    badge:     "badge-low",
+    bar:       "bg-green-500",
+    role:      "status" as const,
   },
 } as const;
 
-type Severity = keyof typeof SEVERITY_CONFIG;
-
-/* Alert type display labels */
 const TYPE_LABELS: Record<string, string> = {
-  recall:        "Recall",
-  safety_notice: "Safety Notice",
-  advisory:      "Advisory",
-  hazard_alert:  "Hazard Alert",
+  recall:           "Recall",
+  safety_notice:    "Safety Notice",
+  field_correction: "Field Correction",
+  hazard_alert:     "Hazard Alert",
 };
 
-/* ─── Mock data ───────────────────────────────────────────────────────────── */
-const mockAlerts = [
-  {
-    id:           "1",
-    alertType:    "recall",
-    source:       "FDA MedWatch",
-    title:        "Voluntary Recall: Zimmer Biomet Continuum Acetabular System",
-    summary:      "Potential for early polyethylene wear due to manufacturing variance in lot Z-2024-03. Affected units may require earlier-than-expected revision surgery.",
-    severity:     "high" as Severity,
-    publishedAt:  "2024-03-15",
-    acknowledged: false,
-    affectedSkus: ["ZB-CONTINUUM-28", "ZB-CONTINUUM-32"],
-  },
-  {
-    id:           "2",
-    alertType:    "safety_notice",
-    source:       "Medtronic",
-    title:        "Field Safety Corrective Action: Visia AF ICD Firmware Update Required",
-    summary:      "Advisory regarding battery depletion detection in firmware v2.1. Update to v2.3 required within 90 days.",
-    severity:     "medium" as Severity,
-    publishedAt:  "2024-02-28",
-    acknowledged: true,
-    affectedSkus: ["MDT-VISIA-AF-ICD-3T"],
-  },
-];
+// ── Page ──────────────────────────────────────────────────────────────────────
+export default async function AlertsPage() {
+  const result = await apiClient.alerts
+    .list({ status: "active", limit: 50 })
+    .catch(() => ({ data: [] as Alert[], total: 0, page: 1, limit: 50 }));
 
-const unacknowledgedCount = mockAlerts.filter((a) => !a.acknowledged).length;
+  const alerts              = result.data;
+  const total               = result.total;
+  const apiDown             = total === 0 && alerts.length === 0;
 
-/* ─── Page ───────────────────────────────────────────────────────────────── */
-export default function AlertsPage() {
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Page header */}
@@ -80,13 +55,12 @@ export default function AlertsPage() {
         <div>
           <h1 className="page-title flex items-center gap-3">
             Safety Alerts
-            {unacknowledgedCount > 0 && (
-              /* Unacknowledged count badge — draws attention without being alarming */
+            {total > 0 && (
               <span
                 className="badge-recalled text-xs"
-                aria-label={`${unacknowledgedCount} unacknowledged alert${unacknowledgedCount !== 1 ? "s" : ""}`}
+                aria-label={`${total} unacknowledged alert${total !== 1 ? "s" : ""}`}
               >
-                {unacknowledgedCount} unacknowledged
+                {total} unacknowledged
               </span>
             )}
           </h1>
@@ -96,130 +70,109 @@ export default function AlertsPage() {
         </div>
       </div>
 
-      {/* Preview notice */}
-      <div className="preview-banner">
-        <svg aria-hidden="true" className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
-        </svg>
-        Preview data — connect API + database for live alert ingestion
-      </div>
+      {/* API unavailable notice */}
+      {apiDown && (
+        <div className="preview-banner">
+          <svg aria-hidden="true" className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
+          </svg>
+          API not reachable — start the API server and run migrations to load live alerts
+        </div>
+      )}
 
       {/* Alert list */}
-      <div className="space-y-3">
-        {mockAlerts.map((alert) => {
-          const s = SEVERITY_CONFIG[alert.severity];
-          const typeLabel = TYPE_LABELS[alert.alertType] ?? alert.alertType;
+      {alerts.length > 0 && (
+        <div className="space-y-3">
+          {alerts.map((alert) => {
+            const severity  = (alert.severity ?? "medium") as keyof typeof SEVERITY_CONFIG;
+            const s         = SEVERITY_CONFIG[severity] ?? SEVERITY_CONFIG.medium;
+            const typeLabel = TYPE_LABELS[alert.alertType] ?? alert.alertType;
 
-          return (
-            /*
-              role="alert" → high severity: announced immediately by screen readers
-              role="status" → lower severity: polite announcement (Inclusive Components)
-              We avoid wrapping the whole card in role="alert" for acknowledged items
-              since that would be noisy.
-            */
-            <article
-              key={alert.id}
-              role={!alert.acknowledged ? s.role : undefined}
-              aria-label={`${alert.severity} severity ${typeLabel}: ${alert.title}`}
-              className={[
-                "card overflow-hidden transition-opacity duration-200",
-                alert.acknowledged ? "opacity-60" : "",
-              ].join(" ")}
-            >
-              {/* Severity bar — left accent strip (Refactoring UI: use borders/color for emphasis, not just badges) */}
-              <div className="flex">
-                <div
-                  aria-hidden="true"
-                  className={`w-1 shrink-0 ${s.bar}`}
-                />
+            return (
+              <article
+                key={alert.id}
+                role={s.role}
+                aria-label={`${severity} severity ${typeLabel}: ${alert.title}`}
+                className="card overflow-hidden"
+              >
+                {/* Left severity bar */}
+                <div className="flex">
+                  <div aria-hidden="true" className={`w-1 shrink-0 ${s.bar}`} />
 
-                <div className="flex-1 p-5">
-                  {/* Header row */}
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      {/* Severity badge */}
-                      <span className={s.badge}>
-                        <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${s.bar}`} />
-                        {alert.severity.charAt(0).toUpperCase() + alert.severity.slice(1)}
-                      </span>
-
-                      {/* Alert type */}
-                      <span className="badge-alert-type">
-                        {typeLabel}
-                      </span>
-
-                      {/* Source */}
-                      <span className="text-xs text-gray-400 font-medium">
-                        {alert.source}
-                      </span>
-
-                      {/* Acknowledged checkmark */}
-                      {alert.acknowledged && (
-                        <span className="flex items-center gap-1 text-xs font-semibold text-emerald-600">
-                          <svg aria-hidden="true" className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20">
-                            <path fillRule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm3.857-9.809a.75.75 0 0 0-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 1 0-1.06 1.061l2.5 2.5a.75.75 0 0 0 1.137-.089l4-5.5Z" clipRule="evenodd" />
-                          </svg>
-                          Acknowledged
+                  <div className="flex-1 p-5">
+                    {/* Header row */}
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={s.badge}>
+                          <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${s.bar}`} />
+                          {severity.charAt(0).toUpperCase() + severity.slice(1)}
                         </span>
-                      )}
-                    </div>
+                        <span className="badge-alert-type">{typeLabel}</span>
+                        {alert.source && (
+                          <span className="text-xs text-gray-400 font-medium">{alert.source}</span>
+                        )}
+                      </div>
 
-                    {/* Acknowledge action */}
-                    {!alert.acknowledged && (
-                      <button
-                        className="btn-secondary text-xs px-3 py-1.5 shrink-0"
-                        aria-label={`Acknowledge alert: ${alert.title}`}
-                      >
-                        Acknowledge
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Alert title */}
-                  <h2 className="mt-3 font-semibold text-gray-900 leading-snug">
-                    {alert.title}
-                  </h2>
-
-                  {/* Summary */}
-                  <p className="mt-1.5 text-sm text-gray-600 leading-relaxed">
-                    {alert.summary}
-                  </p>
-
-                  {/* Affected SKUs */}
-                  {alert.affectedSkus && alert.affectedSkus.length > 0 && (
-                    <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                      <span className="text-2xs font-semibold uppercase tracking-widest text-gray-400">Affected SKUs:</span>
-                      {alert.affectedSkus.map((sku) => (
-                        <code
-                          key={sku}
-                          className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-2xs text-gray-600"
+                      {/* Acknowledge action — Safety Officer only in prod; all users in dev */}
+                      <form action={`/api/alerts/${alert.id}/acknowledge`} method="post">
+                        <button
+                          type="submit"
+                          className="btn-secondary text-xs px-3 py-1.5 shrink-0"
+                          aria-label={`Acknowledge alert: ${alert.title}`}
                         >
-                          {sku}
-                        </code>
-                      ))}
+                          Acknowledge
+                        </button>
+                      </form>
                     </div>
-                  )}
 
-                  {/* Date */}
-                  <p className="mt-3 text-xs text-gray-400">
-                    Published{" "}
-                    <time dateTime={alert.publishedAt}>
-                      {new Date(alert.publishedAt).toLocaleDateString("en-US", {
-                        month: "long",
-                        day:   "numeric",
-                        year:  "numeric",
-                      })}
-                    </time>
-                  </p>
+                    {/* Title */}
+                    <h2 className="mt-3 font-semibold text-gray-900 leading-snug">
+                      {alert.title}
+                    </h2>
+
+                    {/* Summary */}
+                    <p className="mt-1.5 text-sm text-gray-600 leading-relaxed">
+                      {alert.summary}
+                    </p>
+
+                    {/* Affected SKUs */}
+                    {alert.affectedSkus && alert.affectedSkus.length > 0 && (
+                      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                        <span className="text-2xs font-semibold uppercase tracking-widest text-gray-400">
+                          Affected SKUs:
+                        </span>
+                        {alert.affectedSkus.map((sku) => (
+                          <code
+                            key={sku}
+                            className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-2xs text-gray-600"
+                          >
+                            {sku}
+                          </code>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Date */}
+                    <p className="mt-3 text-xs text-gray-400">
+                      Published{" "}
+                      <time dateTime={alert.publishedAt}>
+                        {new Date(alert.publishedAt).toLocaleDateString("en-US", {
+                          month: "long",
+                          day:   "numeric",
+                          year:  "numeric",
+                        })}
+                      </time>
+                    </p>
+                  </div>
                 </div>
-              </div>
-            </article>
-          );
-        })}
-      </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
 
-      {/* Empty state (rendered when alerts list is empty in production) */}
-      {mockAlerts.length === 0 && (
+      {/* All clear / empty state */}
+      {alerts.length === 0 && !apiDown && (
         <div className="card flex flex-col items-center gap-3 px-6 py-16 text-center">
           <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50">
             <svg aria-hidden="true" className="h-7 w-7 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>

@@ -183,7 +183,7 @@ export function SidebarNav({ user }: SidebarNavProps) {
               src={user.picture}
               alt={user.name ?? "User avatar"}
               className="h-9 w-9 shrink-0 rounded-full ring-2"
-              style={{ ringColor: "rgb(30 30 50)" }}
+              style={{ outline: "2px solid rgb(30 30 50)", outlineOffset: "0px" }}
             />
           ) : (
             <span
