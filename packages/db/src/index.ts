@@ -1,4 +1,4 @@
-export { PrismaClient } from "@prisma/client";
+export { PrismaClient, Prisma } from "@prisma/client";
 export type {
   Tenant,
   User,
@@ -8,9 +8,17 @@ export type {
   DeviceDocument,
   Annotation,
   AnnotationEndorsement,
+  AnnotationVote,
+  AnnotationFlag,
+  AnnotationTag,
+  AnnotationTagLink,
+  Comment,
+  CommentVote,
+  UserReputation,
   Alert,
   AlertDeviceLink,
   TenantAlertAcknowledgement,
   Sop,
   AuditLog,
+  IngestionRun,
 } from "@prisma/client";

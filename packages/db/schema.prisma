@@ -16,19 +16,20 @@ datasource db {
 // ============================================================
 
 model Tenant {
-  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name         String
-  slug         String    @unique
-  planTier     String    @default("standard")
-  baaSignedAt  DateTime?
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name          String
+  slug          String    @unique
+  planTier      String    @default("standard")
+  baaSignedAt   DateTime?
   baaDocumentS3 String?
-  isActive     Boolean   @default(true)
-  settings     Json      @default("{}")
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  isActive      Boolean   @default(true)
+  settings      Json      @default("{}")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   users                       User[]
   annotations                 Annotation[]
+  comments                    Comment[]
   sops                        Sop[]
   auditLogs                   AuditLog[]
   tenantAlertAcknowledgements TenantAlertAcknowledgement[]
@@ -37,24 +38,36 @@ model Tenant {
 }
 
 model User {
-  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  tenantId            String    @db.Uuid
-  auth0UserId         String    @unique
-  email               String
-  fullName            String
-  role                String    // surgeon | hospital_safety_officer | system_admin | it_procurement
-  specialty           String?
-  npiNumber           String?
-  isVerifiedClinician Boolean   @default(false)
-  isActive            Boolean   @default(true)
-  lastLoginAt         DateTime?
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId         String    @db.Uuid
+  auth0UserId      String    @unique
+  email            String
+  fullName         String
+  role             String    // surgeon | hospital_safety_officer | system_admin | it_procurement
+  specialty        String?
+  npiNumber        String?
+  // Replaces isVerifiedClinician (boolean) — 0-3 verification tier scale:
+  //   0 = Registered, email unverified (read-only)
+  //   1 = Email verified via hospital domain (read + flag only)
+  //   2 = NPI validated against public registry (full participation)
+  //   3 = Manually reviewed by admin (trusted contributor, 1.5× vote weight)
+  verificationTier Int       @default(0)
+  isActive         Boolean   @default(true)
+  lastLoginAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   tenant                      Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   annotations                 Annotation[]                 @relation("AnnotationAuthor")
   annotationReviews           Annotation[]                 @relation("AnnotationReviewer")
   annotationEndorsements      AnnotationEndorsement[]
+  annotationVotes             AnnotationVote[]
+  annotationFlags             AnnotationFlag[]             @relation("FlaggedBy")
+  resolvedFlags               AnnotationFlag[]             @relation("FlagResolved")
+  comments                    Comment[]                    @relation("CommentAuthor")
+  commentReviews              Comment[]                    @relation("CommentReviewer")
+  commentVotes                CommentVote[]
+  userReputation              UserReputation?
   approvedDevices             Device[]                     @relation("DeviceApprover")
   uploadedDocuments           DeviceDocument[]
   tenantAlertAcknowledgements TenantAlertAcknowledgement[] @relation("AcknowledgedBy")
@@ -65,20 +78,34 @@ model User {
   @@map("users")
 }
 
+// ── User reputation — cumulative score derived from votes received ────────────
+model UserReputation {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String   @unique @db.Uuid
+  totalScore   Float    @default(0)
+  weeklyScore  Float    @default(0)
+  monthlyScore Float    @default(0)
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_reputations")
+}
+
 // ============================================================
 // HARDWARE INDEX
 // ============================================================
 
 model Manufacturer {
-  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name                String
-  slug                String   @unique
-  countryOfOrigin     String?
-  fdaEstablishmentId  String?
-  contactEmail        String?
-  websiteUrl          String?
-  isActive            Boolean  @default(true)
-  createdAt           DateTime @default(now())
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name               String
+  slug               String   @unique
+  countryOfOrigin    String?
+  fdaEstablishmentId String?
+  contactEmail       String?
+  websiteUrl         String?
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
 
   devices Device[]
 
@@ -90,6 +117,8 @@ model DeviceCategory {
   name      String
   parentId  String?  @db.Uuid
   code      String   @unique
+  // Specialty hint used by the ranking algorithm's specialtyRelevanceScore
+  specialtyHint String?
   createdAt DateTime @default(now())
 
   parent   DeviceCategory?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
@@ -100,19 +129,19 @@ model DeviceCategory {
 }
 
 model Device {
-  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  sku                 String
-  manufacturerId      String    @db.Uuid
-  categoryId          String    @db.Uuid
-  name                String
-  description         String?
-  modelNumber         String?
-  version             String?
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sku            String
+  manufacturerId String    @db.Uuid
+  categoryId     String    @db.Uuid
+  name           String
+  description    String?
+  modelNumber    String?
+  version        String?
 
   // Regulatory
-  fdA510kNumber       String?
-  ceMmarkNumber       String?
-  regulatoryStatus    String    @default("approved")  // approved | recalled | pending | withdrawn
+  fdA510kNumber    String?
+  ceMmarkNumber    String?
+  regulatoryStatus String    @default("approved") // approved | recalled | pending | withdrawn
 
   // Clinical data (semi-structured)
   materialComposition Json?
@@ -122,40 +151,40 @@ model Device {
   sterilizationMethod String?
 
   // Approval workflow
-  approvalStatus      String    @default("pending")   // pending | approved | rejected
-  approvedById        String?   @db.Uuid
-  approvedAt          DateTime?
+  approvalStatus String    @default("pending") // pending | approved | rejected
+  approvedById   String?   @db.Uuid
+  approvedAt     DateTime?
 
-  isActive            Boolean   @default(true)
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  manufacturer        Manufacturer    @relation(fields: [manufacturerId], references: [id])
-  category            DeviceCategory  @relation(fields: [categoryId], references: [id])
-  approvedBy          User?           @relation("DeviceApprover", fields: [approvedById], references: [id])
-  documents           DeviceDocument[]
-  annotations         Annotation[]
-  alertDeviceLinks    AlertDeviceLink[]
+  manufacturer     Manufacturer     @relation(fields: [manufacturerId], references: [id])
+  category         DeviceCategory   @relation(fields: [categoryId], references: [id])
+  approvedBy       User?            @relation("DeviceApprover", fields: [approvedById], references: [id])
+  documents        DeviceDocument[]
+  annotations      Annotation[]
+  alertDeviceLinks AlertDeviceLink[]
 
   @@unique([sku, manufacturerId])
   @@map("devices")
 }
 
 model DeviceDocument {
-  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  deviceId        String   @db.Uuid
-  documentType    String   // ifu | image | technical_spec | safety_notice
-  title           String
-  s3Key           String   // NEVER expose this directly — generate pre-signed URLs
-  fileSizeBytes   BigInt?
-  mimeType        String?
-  version         String?
-  uploadedById    String?  @db.Uuid
-  isCurrent       Boolean  @default(true)
-  createdAt       DateTime @default(now())
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  deviceId      String   @db.Uuid
+  documentType  String   // ifu | image | technical_spec | safety_notice
+  title         String
+  s3Key         String   // NEVER expose — generate pre-signed URLs only
+  fileSizeBytes BigInt?
+  mimeType      String?
+  version       String?
+  uploadedById  String?  @db.Uuid
+  isCurrent     Boolean  @default(true)
+  createdAt     DateTime @default(now())
 
-  device     Device  @relation(fields: [deviceId], references: [id], onDelete: Cascade)
-  uploadedBy User?   @relation(fields: [uploadedById], references: [id])
+  device     Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  uploadedBy User?  @relation(fields: [uploadedById], references: [id])
 
   @@map("device_documents")
 }
@@ -165,47 +194,53 @@ model DeviceDocument {
 // ============================================================
 
 model Annotation {
-  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  deviceId       String    @db.Uuid
-  tenantId       String    @db.Uuid
-  authorId       String    @db.Uuid
+  id        String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  deviceId  String @db.Uuid
+  tenantId  String @db.Uuid
+  authorId  String @db.Uuid
 
-  annotationType String    // operational_friction | failure_mode | material_tolerance | tooling_anomaly | general_observation
-  severity       String?   // low | medium | high | critical
+  annotationType String  // operational_friction | failure_mode | material_tolerance | tooling_anomaly | general_observation
+  severity       String? // low | medium | high | critical
   title          String
   body           String
   structuredData Json?
 
   // Procedure context — minimized PHI
-  procedureType  String?
-  procedureDate  DateTime? @db.Date      // Date only, not timestamp
-  patientCount   Int?                    // Aggregate count only
+  procedureType String?
+  procedureDate DateTime? @db.Date   // Date only — no timestamp to prevent PHI leakage
+  patientCount  Int?                 // Aggregate count only — never individual identifiers
 
   // Visibility
-  visibility     String    @default("tenant")  // tenant | platform
-  isAnonymized   Boolean   @default(false)
+  visibility   String  @default("tenant") // tenant | platform
+  isAnonymized Boolean @default(false)
 
   // Moderation
-  isPublished    Boolean   @default(false)
-  reviewedById   String?   @db.Uuid
-  reviewedAt     DateTime?
-  reviewNotes    String?
+  isPublished  Boolean   @default(false)
+  reviewedById String?   @db.Uuid
+  reviewedAt   DateTime?
+  reviewNotes  String?
 
-  // Versioning — annotations are immutable once published
-  version        Int       @default(1)
-  parentId       String?   @db.Uuid
+  // Versioning — annotations are immutable once published; corrections create a new version
+  version  Int     @default(1)
+  parentId String? @db.Uuid
 
-  createdAt      DateTime  @default(now())
-  // No updatedAt: annotations are append-only
+  createdAt DateTime @default(now())
+  // No updatedAt: append-only by design
 
-  device                  Device                  @relation(fields: [deviceId], references: [id], onDelete: Cascade)
-  tenant                  Tenant                  @relation(fields: [tenantId], references: [id])
-  author                  User                    @relation("AnnotationAuthor", fields: [authorId], references: [id])
-  reviewedBy              User?                   @relation("AnnotationReviewer", fields: [reviewedById], references: [id])
-  parent                  Annotation?             @relation("AnnotationVersions", fields: [parentId], references: [id])
-  versions                Annotation[]            @relation("AnnotationVersions")
-  annotationEndorsements  AnnotationEndorsement[]
+  device                 Device                  @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  tenant                 Tenant                  @relation(fields: [tenantId], references: [id])
+  author                 User                    @relation("AnnotationAuthor", fields: [authorId], references: [id])
+  reviewedBy             User?                   @relation("AnnotationReviewer", fields: [reviewedById], references: [id])
+  parent                 Annotation?             @relation("AnnotationVersions", fields: [parentId], references: [id])
+  versions               Annotation[]            @relation("AnnotationVersions")
+  annotationEndorsements AnnotationEndorsement[]
+  votes                  AnnotationVote[]
+  comments               Comment[]
+  tags                   AnnotationTagLink[]
+  flags                  AnnotationFlag[]
 
+  @@index([deviceId, isPublished])
+  @@index([tenantId, createdAt(sort: Desc)])
   @@map("annotations")
 }
 
@@ -215,11 +250,122 @@ model AnnotationEndorsement {
   userId       String   @db.Uuid
   createdAt    DateTime @default(now())
 
-  annotation Annotation @relation(fields: [annotationId], references: [id])
+  annotation Annotation @relation(fields: [annotationId], references: [id], onDelete: Cascade)
   user       User       @relation(fields: [userId], references: [id])
 
   @@unique([annotationId, userId])
   @@map("annotation_endorsements")
+}
+
+// ── Annotation votes (-1 / +1) with weighted specialty relevance ──────────────
+model AnnotationVote {
+  id                    String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  annotationId          String   @db.Uuid
+  userId                String   @db.Uuid
+  value                 Int      // -1 (downvote) or +1 (upvote)
+  // Computed at write time:
+  //   voter.specialty === device.category.specialtyHint → 1.5
+  //   related specialty (static map)                   → 1.0
+  //   unrelated                                        → 0.6
+  specialtyRelevanceScore Float  @default(1.0)
+  createdAt             DateTime @default(now())
+
+  annotation Annotation @relation(fields: [annotationId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([annotationId, userId])
+  @@index([annotationId])
+  @@map("annotation_votes")
+}
+
+// ── Threaded comments — append-only, max 3 nesting levels (depth 0-2) ─────────
+model Comment {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  annotationId String    @db.Uuid
+  parentId     String?   @db.Uuid  // null = top-level; self-ref = reply
+  authorId     String    @db.Uuid
+  tenantId     String    @db.Uuid
+  body         String
+  depth        Int       @default(0) // 0 = top-level, 1 = reply, 2 = nested reply (max)
+  isAnonymized Boolean   @default(false)
+  isPublished  Boolean   @default(true)
+  reviewedById String?   @db.Uuid
+  reviewedAt   DateTime?
+  // No updatedAt: append-only by design
+  createdAt    DateTime  @default(now())
+
+  annotation  Annotation @relation(fields: [annotationId], references: [id], onDelete: Cascade)
+  parent      Comment?   @relation("CommentThreading", fields: [parentId], references: [id])
+  replies     Comment[]  @relation("CommentThreading")
+  tenant      Tenant     @relation(fields: [tenantId], references: [id])
+  author      User       @relation("CommentAuthor", fields: [authorId], references: [id])
+  reviewedBy  User?      @relation("CommentReviewer", fields: [reviewedById], references: [id])
+  votes       CommentVote[]
+
+  @@index([annotationId, depth])
+  @@index([parentId])
+  @@map("comments")
+}
+
+model CommentVote {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  commentId String   @db.Uuid
+  userId    String   @db.Uuid
+  value     Int      // -1 or +1
+  createdAt DateTime @default(now())
+
+  comment Comment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([commentId, userId])
+  @@index([commentId])
+  @@map("comment_votes")
+}
+
+// ── Tags — categorised labels attached to annotations ─────────────────────────
+model AnnotationTag {
+  id       String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name     String
+  slug     String @unique
+  // device_type | specialty | material | procedure
+  category String
+
+  tagLinks AnnotationTagLink[]
+
+  @@map("annotation_tags")
+}
+
+model AnnotationTagLink {
+  annotationId String @db.Uuid
+  tagId        String @db.Uuid
+
+  annotation Annotation    @relation(fields: [annotationId], references: [id], onDelete: Cascade)
+  tag        AnnotationTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([annotationId, tagId])
+  @@map("annotation_tag_links")
+}
+
+// ── Flags — clinical danger / dispute reports on annotations ──────────────────
+model AnnotationFlag {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  annotationId String    @db.Uuid
+  flaggedById  String    @db.Uuid
+  // dangerous | inaccurate | spam | conflict_of_interest
+  reason       String
+  notes        String?
+  resolvedById String?   @db.Uuid
+  resolvedAt   DateTime?
+  resolution   String?   // e.g. "removed", "disputed", "validated"
+  createdAt    DateTime  @default(now())
+
+  annotation Annotation @relation(fields: [annotationId], references: [id], onDelete: Cascade)
+  flaggedBy  User       @relation("FlaggedBy", fields: [flaggedById], references: [id])
+  resolvedBy User?      @relation("FlagResolved", fields: [resolvedById], references: [id])
+
+  @@index([annotationId])
+  @@index([flaggedById])
+  @@map("annotation_flags")
 }
 
 // ============================================================
@@ -230,7 +376,7 @@ model Alert {
   id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   alertType    String    // recall | safety_notice | field_correction | hazard_alert
   source       String    // "FDA MedWatch" | "Manufacturer" | "Manual"
-  externalId   String?   // FDA recall number
+  externalId   String?   // FDA recall number — used for deduplication
   title        String
   summary      String
   fullText     String?
@@ -250,11 +396,11 @@ model Alert {
 }
 
 model AlertDeviceLink {
-  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  alertId       String   @db.Uuid
-  deviceId      String   @db.Uuid
-  matchMethod   String   // sku_exact | sku_fuzzy | manual
-  matchedAt     DateTime @default(now())
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  alertId     String   @db.Uuid
+  deviceId    String   @db.Uuid
+  matchMethod String   // sku_exact | sku_fuzzy | manual
+  matchedAt   DateTime @default(now())
 
   alert  Alert  @relation(fields: [alertId], references: [id])
   device Device @relation(fields: [deviceId], references: [id])
@@ -284,19 +430,19 @@ model TenantAlertAcknowledgement {
 // ============================================================
 
 model Sop {
-  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  tenantId       String    @db.Uuid
-  title          String
-  version        String
-  contentS3Key   String
-  category       String?
-  effectiveDate  DateTime? @db.Date
-  reviewDate     DateTime? @db.Date
-  status         String    @default("draft")  // draft | active | archived
-  createdById    String    @db.Uuid
-  approvedById   String?   @db.Uuid
-  approvedAt     DateTime?
-  createdAt      DateTime  @default(now())
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId     String    @db.Uuid
+  title        String
+  version      String
+  contentS3Key String
+  category     String?
+  effectiveDate DateTime? @db.Date
+  reviewDate   DateTime? @db.Date
+  status       String    @default("draft") // draft | active | archived
+  createdById  String    @db.Uuid
+  approvedById String?   @db.Uuid
+  approvedAt   DateTime?
+  createdAt    DateTime  @default(now())
 
   tenant     Tenant @relation(fields: [tenantId], references: [id])
   createdBy  User   @relation("SopCreator", fields: [createdById], references: [id])
@@ -309,35 +455,35 @@ model Sop {
 // IMMUTABLE AUDIT LOG
 // ============================================================
 // CRITICAL: The application DB user (app_user) must have
-// INSERT + SELECT ONLY on this table. No UPDATE or DELETE.
+// INSERT + SELECT ONLY. No UPDATE or DELETE.
 // Enforced via migration SQL:
 //   REVOKE UPDATE, DELETE ON audit_logs FROM app_user;
 
 model AuditLog {
-  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
 
-  // Who (denormalized snapshots at time of action)
-  userId       String?   @db.Uuid
-  tenantId     String?   @db.Uuid
-  userEmail    String?
-  userRole     String?
+  // Who (denormalized snapshots at time of action — never FK lookups)
+  userId    String? @db.Uuid
+  tenantId  String? @db.Uuid
+  userEmail String?
+  userRole  String?
 
   // What
-  action       String    // e.g., "device.viewed", "annotation.created"
+  action       String // e.g. "annotation.vote.cast", "comment.created"
   resourceType String
   resourceId   String?
 
   // Change data
-  oldValues    Json?
-  newValues    Json?
+  oldValues Json?
+  newValues Json?
 
-  // Context
-  ipAddress    String?
-  userAgent    String?
-  requestId    String?
-  sessionId    String?
+  // Request context
+  ipAddress String?
+  userAgent String?
+  requestId String?
+  sessionId String?
 
-  createdAt    DateTime  @default(now())
+  createdAt DateTime @default(now())
 
   tenant Tenant? @relation(fields: [tenantId], references: [id])
 
@@ -354,13 +500,13 @@ model IngestionRun {
   id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   source            String
   status            String    @default("running")
-  recordsIngested   Int       @default(0)  @map("records_ingested")
-  recordsSkipped    Int       @default(0)  @map("records_skipped")
-  errorMessage      String?                @map("error_message")
+  recordsIngested   Int       @default(0) @map("records_ingested")
+  recordsSkipped    Int       @default(0) @map("records_skipped")
+  errorMessage      String?               @map("error_message")
   startedAt         DateTime  @default(now()) @map("started_at")
-  completedAt       DateTime?              @map("completed_at")
+  completedAt       DateTime?             @map("completed_at")
   triggeredBy       String    @default("manual") @map("triggered_by")
-  triggeredByUserId String?   @db.Uuid    @map("triggered_by_user_id")
+  triggeredByUserId String?   @db.Uuid @map("triggered_by_user_id")
 
   @@index([source, startedAt(sort: Desc)])
   @@map("ingestion_runs")

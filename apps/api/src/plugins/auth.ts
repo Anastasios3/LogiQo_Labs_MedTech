@@ -19,12 +19,16 @@ declare module "@fastify/jwt" {
       email: string;
       "https://logiqo.io/role": string;
       "https://logiqo.io/tenant_id": string;
+      /** Verification tier (0-3) set by Auth0 Login action from DB */
+      "https://logiqo.io/verification_tier"?: number;
     };
     user: {
       sub: string;
       email: string;
       role: string;
       tenantId: string;
+      /** 0=unverified, 1=domain, 2=NPI, 3=trusted — sourced from JWT custom claim */
+      verificationTier: number;
     };
   }
 }
@@ -61,10 +65,11 @@ const authPluginImpl: FastifyPluginAsync = async (fastify) => {
       }
 
       (request as any).user = {
-        sub:      "00000000-0000-0000-0000-000000000001",
-        email:    "dev@logiqo.local",
-        role:     "system_admin",
-        tenantId: cachedTenantId,
+        sub:              "00000000-0000-0000-0000-000000000001",
+        email:            "dev@logiqo.local",
+        role:             "system_admin",
+        tenantId:         cachedTenantId,
+        verificationTier: 3,  // Dev mode: full trusted access
       };
     });
 
@@ -111,10 +116,11 @@ const authPluginImpl: FastifyPluginAsync = async (fastify) => {
     // Map custom Auth0 claims → normalized user object
     const payload = request.user as any;
     request.user = {
-      sub:      payload.sub,
-      email:    payload.email ?? payload["https://logiqo.io/email"],
-      role:     payload["https://logiqo.io/role"],
-      tenantId: payload["https://logiqo.io/tenant_id"],
+      sub:              payload.sub,
+      email:            payload.email ?? payload["https://logiqo.io/email"],
+      role:             payload["https://logiqo.io/role"],
+      tenantId:         payload["https://logiqo.io/tenant_id"],
+      verificationTier: payload["https://logiqo.io/verification_tier"] ?? 0,
     };
   });
 

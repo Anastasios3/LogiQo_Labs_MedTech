@@ -12,6 +12,7 @@ import { alertsRoutes } from "./modules/alerts/routes.js";
 import { adminRoutes } from "./modules/admin/routes.js";
 import { annotationsRoutes } from "./modules/annotations/routes.js";
 import { ingestionRoutes, settingsRoutes } from "./modules/ingestion/routes.js";
+import { usersRoutes, adminUserRoutes } from "./modules/users/routes.js";
 import { startScheduler } from "./jobs/scheduler.js";
 
 const app = Fastify({
@@ -61,6 +62,8 @@ await app.register(adminRoutes, { prefix: "/admin" });
 await app.register(annotationsRoutes, { prefix: "/annotations" });
 await app.register(ingestionRoutes, { prefix: "/ingestion" });
 await app.register(settingsRoutes,   { prefix: "/settings" });
+await app.register(usersRoutes,      { prefix: "/users" });
+await app.register(adminUserRoutes,  { prefix: "/admin" });
 
 // Health check
 app.get("/health", async () => ({ status: "ok", timestamp: new Date().toISOString() }));

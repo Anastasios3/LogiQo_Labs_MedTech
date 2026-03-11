@@ -26,6 +26,7 @@ export interface Annotation {
     id: string;
     fullName: string;
     specialty?: string | null;
+    verificationTier: number;
   } | null;
   /** Device info — included when fetching annotation feeds */
   device?: {
@@ -36,7 +37,104 @@ export interface Annotation {
   /** Prisma aggregate count for endorsements */
   _count?: {
     annotationEndorsements: number;
+    votes?: number;
+    comments?: number;
   };
   endorsementCount?: number;
+  /** Weighted vote score (used for ranking) */
+  voteScore?: number;
+  /** User's own vote on this annotation (-1, 0, or +1) */
+  userVote?: -1 | 0 | 1 | null;
+  /** Tag slugs attached to this annotation */
+  tags?: AnnotationTagLink[];
+  createdAt: string;
+}
+
+// ── Votes ─────────────────────────────────────────────────────────────────────
+
+export interface AnnotationVote {
+  id: string;
+  annotationId: string;
+  userId: string;
+  /** -1 (downvote) or +1 (upvote) */
+  value: -1 | 1;
+  /**
+   * Computed at write time:
+   *   voter.specialty === device.category.specialtyHint → 1.5
+   *   related specialty                                  → 1.0
+   *   unrelated                                          → 0.6
+   */
+  specialtyRelevanceScore: number;
+  createdAt: string;
+}
+
+// ── Comments ──────────────────────────────────────────────────────────────────
+
+export interface Comment {
+  id: string;
+  annotationId: string;
+  parentId?: string | null;
+  authorId: string;
+  tenantId: string;
+  body: string;
+  /** 0 = top-level, 1 = reply, 2 = nested reply (max) */
+  depth: 0 | 1 | 2;
+  isAnonymized: boolean;
+  isPublished: boolean;
+  author?: {
+    id: string;
+    fullName: string;
+    specialty?: string | null;
+    verificationTier: number;
+  } | null;
+  replies?: Comment[];
+  /** User's own vote on this comment */
+  userVote?: -1 | 0 | 1 | null;
+  voteScore?: number;
+  createdAt: string;
+}
+
+export interface CommentVote {
+  id: string;
+  commentId: string;
+  userId: string;
+  value: -1 | 1;
+  createdAt: string;
+}
+
+// ── Tags ──────────────────────────────────────────────────────────────────────
+
+export type TagCategory = "device_type" | "specialty" | "material" | "procedure";
+
+export interface AnnotationTag {
+  id: string;
+  name: string;
+  slug: string;
+  category: TagCategory;
+}
+
+export interface AnnotationTagLink {
+  annotationId: string;
+  tagId: string;
+  tag?: AnnotationTag;
+}
+
+// ── Flags ─────────────────────────────────────────────────────────────────────
+
+export type FlagReason =
+  | "dangerous"
+  | "inaccurate"
+  | "spam"
+  | "conflict_of_interest";
+
+export interface AnnotationFlag {
+  id: string;
+  annotationId: string;
+  flaggedById: string;
+  reason: FlagReason;
+  notes?: string | null;
+  resolvedById?: string | null;
+  resolvedAt?: string | null;
+  resolution?: string | null;
   createdAt: string;
 }

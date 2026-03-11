@@ -47,7 +47,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
           fullName: email.split("@")[0],
           role: app_metadata?.role ?? "surgeon",
           tenantId: app_metadata?.tenant_id ?? process.env.DEFAULT_TENANT_ID!,
-          isVerifiedClinician: false,
+          verificationTier: 0, // New users start unverified
         },
       });
 

@@ -3,6 +3,7 @@ import { apiClient } from "@/lib/api-client";
 import type { Device, AuditLog } from "@logiqo/shared";
 import type { AdminStats } from "@/lib/api-client";
 import { AddDeviceForm } from "@/components/admin/add-device-form";
+import { VerificationQueue } from "@/components/admin/verification-queue";
 
 export const metadata = {
   title: "Admin Dashboard | LogiQo MedTech",
@@ -57,11 +58,12 @@ function StatCard({
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default async function AdminPage() {
-  const [statsResult, pendingResult, logsResult, metaResult] = await Promise.allSettled([
+  const [statsResult, pendingResult, logsResult, metaResult, usersResult] = await Promise.allSettled([
     apiClient.admin.stats(),
     apiClient.admin.pendingDevices({ limit: 20 }),
     apiClient.admin.auditLogs({ limit: 50 }),
     apiClient.devices.meta(),
+    apiClient.admin.users({ limit: 50 }),
   ]);
 
   const stats: AdminStats = statsResult.status === "fulfilled"
@@ -79,6 +81,8 @@ export default async function AdminPage() {
   const meta = metaResult.status === "fulfilled"
     ? metaResult.value
     : { manufacturers: [], categories: [] };
+
+  const users = usersResult.status === "fulfilled" ? usersResult.value.data : [];
 
   const apiDown = statsResult.status === "rejected";
 
@@ -202,6 +206,16 @@ export default async function AdminPage() {
           )}
         </div>
       </section>
+
+      {/* ── Verification Queue ──────────────────────────────────────────────── */}
+      {users.length > 0 && (
+        <section aria-labelledby="verification-heading">
+          <div className="mb-4">
+            <h2 id="verification-heading" className="section-heading">User Verification Tiers</h2>
+          </div>
+          <VerificationQueue initialUsers={users as any} />
+        </section>
+      )}
 
       {/* ── Audit Log ──────────────────────────────────────────────────────── */}
       <section aria-labelledby="audit-heading">

@@ -1,4 +1,9 @@
-import type { Device, DeviceListResponse, Alert, AuditLog, Annotation, IngestionRun, TenantDataSources, GudidDeviceInfo } from "@logiqo/shared";
+import type {
+  Device, DeviceListResponse, Alert, AuditLog, Annotation,
+  IngestionRun, TenantDataSources, GudidDeviceInfo,
+  AnnotationVote, Comment, AnnotationFlag, AnnotationTag,
+  User, UserReputation,
+} from "@logiqo/shared";
 
 // Server components reach Fastify directly; browser client components use the
 // Next.js rewrite proxy (/api/backend → localhost:8080) to avoid cross-port issues.
@@ -112,7 +117,15 @@ export const apiClient = {
 
   // ── Annotations ───────────────────────────────────────────────────────────────
   annotations: {
-    list: (params?: { deviceId?: string; page?: number; limit?: number }) =>
+    list: (params?: {
+      deviceId?: string;
+      sort?:     "top" | "newest" | "discussed";
+      tag?:      string;
+      type?:     string;
+      severity?: string;
+      page?:     number;
+      limit?:    number;
+    }) =>
       apiFetch<{ data: Annotation[]; total: number; page: number; limit: number }>(
         `/annotations${buildQs(params ?? {})}`
       ),
@@ -127,11 +140,61 @@ export const apiClient = {
       procedureDate?: string;
       patientCount?:  number;
       visibility?:    "tenant" | "platform";
+      tags?:          string[];
     }) =>
       apiFetch<Annotation>("/annotations", {
         method: "POST",
         body:   JSON.stringify(body),
       }),
+
+    // Votes
+    castVote: (annotationId: string, value: -1 | 1) =>
+      apiFetch<{ voteScore: number }>(`/annotations/${annotationId}/votes`, {
+        method: "POST",
+        body:   JSON.stringify({ value }),
+      }),
+
+    removeVote: (annotationId: string) =>
+      apiFetch<void>(`/annotations/${annotationId}/votes`, { method: "DELETE" }),
+
+    // Comments
+    listComments: (annotationId: string) =>
+      apiFetch<Comment[]>(`/annotations/${annotationId}/comments`),
+
+    addComment: (annotationId: string, body: { body: string; parentId?: string }) =>
+      apiFetch<Comment>(`/annotations/${annotationId}/comments`, {
+        method: "POST",
+        body:   JSON.stringify(body),
+      }),
+
+    castCommentVote: (annotationId: string, commentId: string, value: -1 | 1) =>
+      apiFetch<{ ok: boolean }>(`/annotations/${annotationId}/comments/${commentId}/votes`, {
+        method: "POST",
+        body:   JSON.stringify({ value }),
+      }),
+
+    removeCommentVote: (annotationId: string, commentId: string) =>
+      apiFetch<void>(`/annotations/${annotationId}/comments/${commentId}/votes`, {
+        method: "DELETE",
+      }),
+
+    // Flags
+    flag: (annotationId: string, body: { reason: string; notes?: string }) =>
+      apiFetch<AnnotationFlag>(`/annotations/${annotationId}/flags`, {
+        method: "POST",
+        body:   JSON.stringify(body),
+      }),
+  },
+
+  // ── Users / Verification ──────────────────────────────────────────────────────
+  users: {
+    me: () => apiFetch<User & { userReputation?: UserReputation }>("/users/me"),
+
+    submitNpi: (npiNumber: string) =>
+      apiFetch<{ message: string; verificationTier: number; npiNumber: string }>(
+        "/users/me/verification",
+        { method: "PATCH", body: JSON.stringify({ npiNumber }) }
+      ),
   },
 
   // ── Ingestion ────────────────────────────────────────────────────────────────
@@ -186,6 +249,25 @@ export const apiClient = {
       apiFetch<void>(`/admin/devices/${deviceId}/reject`, {
         method: "POST",
         body:   JSON.stringify({ reason }),
+      }),
+
+    // User verification management
+    users: (params?: { tier?: number; page?: number; limit?: number }) =>
+      apiFetch<{ data: (User & { userReputation?: UserReputation })[]; total: number; page: number; limit: number }>(
+        `/admin/users${buildQs(params ?? {})}`
+      ),
+
+    setUserTier: (userId: string, tier: 0 | 1 | 2 | 3, reason?: string) =>
+      apiFetch<User>(`/admin/users/${userId}/tier`, {
+        method: "PATCH",
+        body:   JSON.stringify({ tier, reason }),
+      }),
+
+    // Open flags for moderation queue
+    resolveFlag: (annotationId: string, flagId: string, resolution: string) =>
+      apiFetch<void>(`/annotations/${annotationId}/flags/${flagId}`, {
+        method: "PATCH",
+        body:   JSON.stringify({ resolution }),
       }),
   },
 };

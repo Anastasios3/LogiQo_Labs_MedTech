@@ -7,6 +7,8 @@ export type * from "./types/audit.js";
 export type * from "./types/common.js";
 export type * from "./types/ingestion.js";
 export * from "./types/ingestion.js";
+// Non-type exports from user types (VerificationTier is a type alias, exported via type *)
+export * from "./types/user.js";
 
 // ── Zod validation schemas ─────────────────────────────────────────────────
 // These are the single source of truth for request/response shapes.
@@ -15,3 +17,4 @@ export * from "./schemas/common.js";
 export * from "./schemas/device.js";
 export * from "./schemas/alert.js";
 export * from "./schemas/annotation.js";
+export * from "./schemas/telemetry.js";
