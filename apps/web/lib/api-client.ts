@@ -1,6 +1,11 @@
 import type { Device, DeviceListResponse, Alert, AuditLog, Annotation } from "@logiqo/shared";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
+// Server components reach Fastify directly; browser client components use the
+// Next.js rewrite proxy (/api/backend → localhost:8080) to avoid cross-port issues.
+const API_BASE =
+  typeof window === "undefined"
+    ? (process.env.INTERNAL_API_URL ?? "http://localhost:8080")
+    : "/api/backend";
 
 async function apiFetch<T>(
   path: string,

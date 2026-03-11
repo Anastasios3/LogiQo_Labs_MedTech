@@ -1,6 +1,16 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   transpilePackages: ["@logiqo/shared"],
+  // Proxy /api/backend/* → Fastify API (allows client components to reach the API)
+  async rewrites() {
+    const apiBase = process.env.INTERNAL_API_URL ?? "http://localhost:8080";
+    return [
+      {
+        source: "/api/backend/:path*",
+        destination: `${apiBase}/:path*`,
+      },
+    ];
+  },
   // Security headers
   async headers() {
     return [
