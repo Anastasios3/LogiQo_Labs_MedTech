@@ -278,6 +278,29 @@ export const apiClient = {
       }),
   },
 
+  // ── Subscription (Stripe Checkout + Billing Portal) ──────────────────────────
+  subscribe: {
+    /**
+     * Start a Stripe Checkout session for the given plan.
+     * Returns a Stripe-hosted URL; the caller should `window.location.href = url`.
+     *
+     * @param plan  One of: "individual_monthly" | "individual_annual" |
+     *              "org_monthly" | "org_annual"
+     */
+    checkout: (plan: string) =>
+      apiFetch<{ url: string }>("/subscribe/checkout", {
+        method: "POST",
+        body:   JSON.stringify({ plan }),
+      }),
+
+    /**
+     * Open the Stripe Billing Portal for an existing subscriber.
+     * Returns a Stripe-hosted portal URL; the caller should redirect.
+     */
+    portal: () =>
+      apiFetch<{ url: string }>("/subscribe/portal", { method: "POST" }),
+  },
+
   // ── Admin ────────────────────────────────────────────────────────────────────
   admin: {
     stats: () =>

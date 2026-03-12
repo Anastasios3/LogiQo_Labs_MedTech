@@ -1,4 +1,5 @@
-import { SidebarNav } from "@/components/sidebar-nav";
+import { SidebarNav }       from "@/components/sidebar-nav";
+import { SubscriptionGate } from "@/components/SubscriptionGate";
 
 // Dev-mode mock user when AUTH0_SECRET is not configured
 const DEV_USER = {
@@ -80,9 +81,18 @@ export default async function DashboardLayout({
             className="flex-1 overflow-y-auto scrollbar-thin"
             tabIndex={-1}   /* allows programmatic focus after skip-link */
           >
-            <div className="mx-auto max-w-7xl px-6 py-7">
-              {children}
-            </div>
+            {/*
+              SubscriptionGate is a client component that calls GET /users/me on
+              mount. If the tenant has no active subscription it renders a
+              full-page overlay on top of the children, which continue to render
+              behind it (prevents layout shift and keeps SSR output stable).
+              system_admin role bypasses the gate; network errors fail-open.
+            */}
+            <SubscriptionGate>
+              <div className="mx-auto max-w-7xl px-6 py-7">
+                {children}
+              </div>
+            </SubscriptionGate>
           </main>
         </div>
       </div>

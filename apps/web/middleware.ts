@@ -37,5 +37,11 @@ export const config = {
   matcher: [
     // Protect all dashboard sub-routes (devices, alerts, admin, annotations…)
     "/dashboard/:path*",
+    // Onboarding wizard — requires a valid session to read email_verified / NPI status
+    "/onboarding",
+    "/onboarding/:path*",
+    // Subscription management — requires a valid session to open Stripe Checkout / Portal
+    "/subscribe",
+    "/subscribe/:path*",
   ],
 };

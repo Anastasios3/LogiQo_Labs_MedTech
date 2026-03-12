@@ -13,6 +13,22 @@ export type UserRole =
  */
 export type VerificationTier = 0 | 1 | 2 | 3;
 
+/**
+ * Subscription status values aligned with Stripe subscription states.
+ *
+ *  "none"      — no subscription record exists (free / trial / not yet subscribed)
+ *  "active"    — paid subscription is current; full platform access granted
+ *  "past_due"  — payment failed; Stripe is retrying; read-only grace period
+ *  "canceled"  — subscription was explicitly canceled; access revoked at period end
+ *  "trialing"  — within a Stripe trial period; treated as active for access checks
+ */
+export type SubscriptionStatus =
+  | "none"
+  | "active"
+  | "past_due"
+  | "canceled"
+  | "trialing";
+
 export interface User {
   id: string;
   tenantId: string;
@@ -28,6 +44,12 @@ export interface User {
   isActive: boolean;
   lastLoginAt?: string | null;
   createdAt: string;
+  /**
+   * Reflects the current Stripe subscription state for this user's tenant.
+   * Absent (undefined) in API responses that do not join the subscription table;
+   * always present in GET /users/me and the dashboard session.
+   */
+  subscriptionStatus?: SubscriptionStatus;
 }
 
 export interface UserReputation {
