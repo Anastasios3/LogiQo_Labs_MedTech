@@ -474,6 +474,10 @@ model Alert {
   summary      String
   fullText     String?
   severity     String    // low | medium | high | critical
+  // Denormalized rank maintained at write time (4=critical 3=high 2=medium 1=low).
+  // Enables DB-level ORDER BY without a Node.js heap sort on the full table.
+  // See migration 004_alerts_severity_rank.sql for backfill + index DDL.
+  severityRank Int       @default(1) @map("severity_rank")
   affectedSkus String[]  @db.Text
   publishedAt  DateTime
   expiresAt    DateTime?
@@ -485,6 +489,9 @@ model Alert {
   alertDeviceLinks            AlertDeviceLink[]
   tenantAlertAcknowledgements TenantAlertAcknowledgement[]
 
+  // Composite index mirrors the canonical feed ORDER BY clause:
+  //   severity_rank DESC, published_at DESC
+  @@index([severityRank(sort: Desc), publishedAt(sort: Desc)])
   @@map("alerts")
 }
 
