@@ -563,32 +563,43 @@ model AuditLog {
   id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
 
   // Who (denormalized snapshots at time of action — never FK lookups)
-  userId    String? @db.Uuid
+  // userId is plain String (not @db.Uuid): the API stores the Auth0 subject
+  // string (e.g. "auth0|…"), which is not a valid UUID. See migration 005.
+  userId    String?
   tenantId  String? @db.Uuid
   userEmail String?
   userRole  String?
 
   // What
-  action       String // e.g. "annotation.vote.cast", "comment.created"
+  action       String  // e.g. "annotation.vote.cast", "POST /alerts/:id/acknowledge"
   resourceType String
   resourceId   String?
 
-  // Change data
+  // Change data (business-level events written by fastify.audit() calls)
   oldValues Json?
   newValues Json?
 
-  // Request context
-  ipAddress String?
-  userAgent String?
-  requestId String?
-  sessionId String?
+  // Request context — populated by onResponse auto-hook in plugins/audit.ts
+  ipAddress      String?
+  userAgent      String?
+  requestId      String?
+  sessionId      String?
+  responseStatus Int?    // HTTP status code returned by the handler
+  requestBody    Json?   // sanitized request payload (sensitive fields redacted)
+  metadata       Json?   // reserved for future enrichment (geo-IP, risk score, etc.)
 
   createdAt DateTime @default(now())
 
   tenant Tenant? @relation(fields: [tenantId], references: [id])
 
+  // Composite index: per-tenant viewer query (most common read pattern)
   @@index([tenantId, createdAt(sort: Desc)])
+  // Resource drill-down: find all events touching a specific record
   @@index([resourceType, resourceId])
+  // Actor lookup: who did what — used by system_admin cross-tenant queries
+  @@index([userId])
+  // Operation filter: all events of a given action type
+  @@index([action])
   @@map("audit_logs")
 }
 
