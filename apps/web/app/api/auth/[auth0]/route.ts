@@ -27,14 +27,16 @@ function devFallback(req: NextRequest): NextResponse {
   return NextResponse.redirect(new URL("/", req.url));
 }
 
+// The @auth0/nextjs-auth0 handler type targets the Pages Router signature; we cast
+// to unknown first so TypeScript accepts the App Router call without any-typed variables.
+type AppRouterHandler = (req: NextRequest, ctx: RouteContext) => Promise<Response>;
+
 export async function GET(req: NextRequest, ctx: RouteContext) {
   if (!process.env.AUTH0_SECRET) return devFallback(req);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (prodHandler as any)(req, ctx);
+  return (prodHandler as unknown as AppRouterHandler)(req, ctx);
 }
 
 export async function POST(req: NextRequest, ctx: RouteContext) {
   if (!process.env.AUTH0_SECRET) return devFallback(req);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (prodHandler as any)(req, ctx);
+  return (prodHandler as unknown as AppRouterHandler)(req, ctx);
 }
