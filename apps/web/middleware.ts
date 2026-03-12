@@ -24,14 +24,40 @@
  *   SUBSCRIPTION_REQUIRED 402 — also passes through this middleware (valid
  *   session); handled inline by components or the /subscribe redirect.
  *
+ * ── Dev-mode bypass ──────────────────────────────────────────────────────────
+ *   withMiddlewareAuthRequired() reads AUTH0_SECRET eagerly in the edge
+ *   runtime and throws "secret is not allowed to be empty" if the variable is
+ *   absent or an empty string. This matches the dev-mode check used in
+ *   dashboard/layout.tsx (`if (!process.env.AUTH0_SECRET) return DEV_USER`).
+ *
+ *   When AUTH0_SECRET is unset, the middleware exports a passthrough handler
+ *   (NextResponse.next()) so every matched route proceeds to the page component
+ *   without session validation. Individual pages still render their own dev-mode
+ *   mock data (DEV_USER in the layout, useUser() stub in client components).
+ *
+ *   This bypass MUST NOT reach production — AUTH0_SECRET is always set in the
+ *   Vercel environment and on ECS Fargate, so the real handler is used there.
+ *
  * ── Matcher ──────────────────────────────────────────────────────────────────
- *   Only dashboard routes are protected. Public routes (home, /api/auth/*,
- *   Next.js internals) are intentionally excluded.
+ *   Only dashboard, onboarding, and subscribe routes are protected. Public
+ *   routes (home, /api/auth/*, Next.js internals) are intentionally excluded.
  *   Extend the matcher as new protected top-level segments are added.
  */
 import { withMiddlewareAuthRequired } from "@auth0/nextjs-auth0/edge";
+import { NextResponse }               from "next/server";
 
-export default withMiddlewareAuthRequired();
+// ── Handler selection ─────────────────────────────────────────────────────────
+//
+// AUTH0_SECRET presence is the canonical dev-mode signal, consistent with
+// dashboard/layout.tsx. The conditional is evaluated at module load time;
+// Next.js inlines process.env at build/start so both branches are reachable.
+//
+// No explicit type annotation: TypeScript infers the union of both branches.
+// NextMiddleware accepts (request, event); the passthrough ignores both
+// arguments (fewer params is always assignable in callback position).
+export default process.env.AUTH0_SECRET
+  ? withMiddlewareAuthRequired()
+  : function devPassthrough() { return NextResponse.next(); };
 
 export const config = {
   matcher: [
