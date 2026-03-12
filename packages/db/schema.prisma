@@ -29,16 +29,17 @@ model Tenant {
   // Individual plans leave subscriptionStatus = 'none'; the User table carries
   // the individual subscription. Org plans set this field; the subscription
   // gate checks either User OR Tenant subscription status depending on plan.
-  subscriptionStatus   String  @default("none") // none | active | past_due | canceled
-  subscriptionTier     String?                   // org_monthly | org_annual
-  stripeCustomerId     String? @unique
-  stripeSubscriptionId String? @unique
+  // Phase 3 migration added these columns as snake_case — @map required.
+  subscriptionStatus   String  @default("none") @map("subscription_status")   // none | active | past_due | canceled
+  subscriptionTier     String?                  @map("subscription_tier")     // org_monthly | org_annual
+  stripeCustomerId     String? @unique          @map("stripe_customer_id")
+  stripeSubscriptionId String? @unique          @map("stripe_subscription_id")
 
   // ── Seat management ───────────────────────────────────────────────────────
   // maxUsers is set at org plan activation (pulled from Stripe metadata).
   // activeUserCount is maintained by the invite-acceptance + soft-delete flows.
-  maxUsers        Int @default(20)
-  activeUserCount Int @default(0)
+  maxUsers        Int @default(20) @map("max_users")
+  activeUserCount Int @default(0)  @map("active_user_count")
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -82,7 +83,8 @@ model User {
   isActive         Boolean   @default(true)
   // Soft-delete — set by DELETE /organizations/users/:id (org_admin only).
   // Hard deletes are never performed to preserve audit trail integrity.
-  deletedAt        DateTime?
+  // Phase 3 migration added this column as snake_case — @map required.
+  deletedAt        DateTime? @map("deleted_at")
   lastLoginAt      DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
@@ -115,9 +117,12 @@ model User {
 // One active invitation per email per tenant enforced at the application layer
 // (re-invite resets the token and expiresAt on the existing row).
 model Invitation {
+  // Phase 3 migration created this table with snake_case column names.
+  // All camelCase fields must have @map("snake_case") so the generated client
+  // emits correct SQL column references.
   id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  tenantId    String    @db.Uuid
-  invitedById String    @db.Uuid
+  tenantId    String    @db.Uuid  @map("tenant_id")
+  invitedById String    @db.Uuid  @map("invited_by_id")
 
   email       String
   // Role the invited user will be assigned on registration.
@@ -128,11 +133,11 @@ model Invitation {
   // DB generates it so it is always populated, even on direct DB inserts.
   token       String    @unique @default(dbgenerated("gen_random_uuid()")) @db.Uuid
 
-  expiresAt   DateTime
-  acceptedAt  DateTime?
+  expiresAt   DateTime  @map("expires_at")
+  acceptedAt  DateTime? @map("accepted_at")
   // Set by DELETE /organizations/invitations/:id to invalidate before expiry.
-  revokedAt   DateTime?
-  createdAt   DateTime  @default(now())
+  revokedAt   DateTime? @map("revoked_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
 
   tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   invitedBy User   @relation("InvitationSender", fields: [invitedById], references: [id])
@@ -221,6 +226,9 @@ model Device {
   approvalStatus String    @default("pending") // pending | approved | rejected
   approvedById   String?   @db.Uuid
   approvedAt     DateTime?
+
+  // Analytics
+  viewCount  Int  @default(0) @map("view_count")
 
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())

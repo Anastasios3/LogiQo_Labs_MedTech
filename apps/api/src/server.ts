@@ -3,11 +3,13 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
+import multipart from "@fastify/multipart";
 import { authPlugin } from "./plugins/auth.js";
 import { dbPlugin } from "./plugins/db.js";
 import { redisPlugin } from "./plugins/redis.js";
 import { auditPlugin } from "./plugins/audit.js";
 import { devicesRoutes } from "./modules/devices/routes.js";
+import { documentsRoutes } from "./modules/documents/routes.js";
 import { alertsRoutes } from "./modules/alerts/routes.js";
 import { adminRoutes } from "./modules/admin/routes.js";
 import { annotationsRoutes } from "./modules/annotations/routes.js";
@@ -61,6 +63,18 @@ await app.register(authPlugin);
 await app.register(auditPlugin);
 await app.register(subscriptionGatePlugin);
 
+// ── Multipart support (document uploads) ──────────────────────────────────────
+// Registered globally so @fastify/multipart attaches its content-type parser
+// once and all routes can call request.parts(). The limits here are safety
+// defaults — the upload route re-validates size and MIME after buffering.
+await app.register(multipart, {
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10 MB absolute maximum
+    files:    1,                 // one file per request
+    fields:   10,                // documentType, title, version + headroom
+  },
+});
+
 // Public auth routes (registration, email verification, NPI submission — no subscription required)
 await app.register(authRoutes, { prefix: "/auth" });
 
@@ -80,14 +94,15 @@ await app.register(async function protectedRoutes(scope) {
     await scope.checkSubscription(request, reply);
   });
 
-  await scope.register(devicesRoutes,      { prefix: "/devices" });
-  await scope.register(alertsRoutes,       { prefix: "/alerts" });
-  await scope.register(adminRoutes,        { prefix: "/admin" });
-  await scope.register(annotationsRoutes,  { prefix: "/annotations" });
-  await scope.register(ingestionRoutes,    { prefix: "/ingestion" });
-  await scope.register(settingsRoutes,     { prefix: "/settings" });
-  await scope.register(usersRoutes,        { prefix: "/users" });
-  await scope.register(adminUserRoutes,    { prefix: "/admin" });
+  await scope.register(devicesRoutes,       { prefix: "/devices" });
+  await scope.register(documentsRoutes,     { prefix: "/documents" });
+  await scope.register(alertsRoutes,        { prefix: "/alerts" });
+  await scope.register(adminRoutes,         { prefix: "/admin" });
+  await scope.register(annotationsRoutes,   { prefix: "/annotations" });
+  await scope.register(ingestionRoutes,     { prefix: "/ingestion" });
+  await scope.register(settingsRoutes,      { prefix: "/settings" });
+  await scope.register(usersRoutes,         { prefix: "/users" });
+  await scope.register(adminUserRoutes,     { prefix: "/admin" });
   await scope.register(organizationsRoutes, { prefix: "/organizations" });
 });
 

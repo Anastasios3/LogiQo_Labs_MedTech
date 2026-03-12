@@ -1,0 +1,43 @@
+{
+  "_comment": "Least-privilege IAM policy for the logiqo-api-dev IAM user.",
+  "_comment2": "Replace REGION, ACCOUNT_ID, BUCKET, and KMS_KEY_ID with real values before applying manually.",
+  "_usage": "aws iam put-user-policy --user-name logiqo-api-dev --policy-name logiqo-s3-document-access --policy-document file://infra/iam-policy-logiqo-api.json",
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "S3DocumentAccess",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject",
+        "s3:HeadObject"
+      ],
+      "Resource": "arn:aws:s3:::logiqo-medtech-documents-dev/*"
+    },
+    {
+      "Sid": "S3BucketProbe",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket",
+        "s3:GetBucketLocation"
+      ],
+      "Resource": "arn:aws:s3:::logiqo-medtech-documents-dev"
+    },
+    {
+      "Sid": "KMSDocumentEncryption",
+      "Effect": "Allow",
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Decrypt",
+        "kms:DescribeKey"
+      ],
+      "Resource": "arn:aws:kms:REGION:ACCOUNT_ID:key/KMS_KEY_ID",
+      "Condition": {
+        "StringLike": {
+          "kms:ViaService": "s3.REGION.amazonaws.com"
+        }
+      }
+    }
+  ]
+}
