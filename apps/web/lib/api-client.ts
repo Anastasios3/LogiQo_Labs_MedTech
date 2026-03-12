@@ -19,12 +19,18 @@ export interface Invitation {
 
 export type OrgUser = User & { userReputation?: { totalScore: number } | null };
 
-// Server components reach Fastify directly; browser client components use the
-// Next.js rewrite proxy (/api/backend → localhost:8080) to avoid cross-port issues.
+// Server components reach Fastify directly via INTERNAL_API_URL (or localhost:8080 as
+// fallback). Browser client components normally go through the Next.js rewrite proxy
+// (/api/backend → localhost:8080) so they stay on the same origin and avoid CORS.
+//
+// E2E / dev exception: when NEXT_PUBLIC_API_URL is set (e.g. to "http://localhost:8080"
+// in playwright.config.ts webServer.env), the browser calls that URL directly. This lets
+// Playwright's page.route() intercept requests at the browser level — the /api/backend
+// proxy would hide them from Playwright because the browser never sees the upstream URL.
 const API_BASE =
   typeof window === "undefined"
     ? (process.env.INTERNAL_API_URL ?? "http://localhost:8080")
-    : "/api/backend";
+    : (process.env.NEXT_PUBLIC_API_URL ?? "/api/backend");
 
 // ── Typed API error ───────────────────────────────────────────────────────────
 
