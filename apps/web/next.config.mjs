@@ -13,6 +13,31 @@ const nextConfig = {
   },
   // Security headers
   async headers() {
+    // Auth0 domains — adjust if using a custom Auth0 domain
+    const auth0Domain = process.env.AUTH0_ISSUER_BASE_URL ?? "";
+
+    // Content-Security-Policy
+    // - default-src 'self': block all external resources by default
+    // - script-src: Next.js needs 'unsafe-inline' for inline hydration scripts
+    //   and 'unsafe-eval' is NOT included (prevents eval-based XSS)
+    // - style-src: Tailwind uses inline styles; restrict to self + inline
+    // - img-src: allow data URIs (avatars) and any HTTPS image CDN
+    // - connect-src: API calls go to self (via Next.js rewrites) + Auth0
+    // - frame-ancestors 'none': belt-and-suspenders alongside X-Frame-Options
+    const csp = [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: https:",
+      `connect-src 'self' ${auth0Domain} https://api.logiqo.io`,
+      "font-src 'self'",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "frame-ancestors 'none'",
+      "upgrade-insecure-requests",
+    ].join("; ");
+
     return [
       {
         source: "/(.*)",
@@ -27,6 +52,10 @@ const nextConfig = {
           {
             key: "Permissions-Policy",
             value: "camera=(), microphone=(), geolocation=()",
+          },
+          {
+            key: "Content-Security-Policy",
+            value: csp,
           },
         ],
       },

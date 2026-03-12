@@ -946,6 +946,501 @@ async function main() {
   console.log("  00000000-0000-0000-0000-000000000001");
 }
 
+// ── Demo data seeding ─────────────────────────────────────────────────────────
+// Activated with: pnpm db:seed -- --demo-data
+// Adds high-volume realistic data suited for sales demos and load testing.
+
+async function seedDemoData() {
+  console.log("\n🎭  Starting demo data seed…");
+
+  // ── Idempotency cleanup ───────────────────────────────────────────────────
+  // Delete any rows written by a previous demo seed run so this function is
+  // safe to call multiple times (repeatable demo environment resets).
+  //
+  // UUID fields use Prisma `in` lists (startsWith is invalid on UuidFilter).
+  // String fields (sku, auth0UserId, userAgent) support startsWith / exact.
+  // Order matters: foreign-key children before parents.
+  const DEMO_SEED_AGENT = "Mozilla/5.0 (Demo Seed Generator)";
+
+  // Known annotation IDs: de00a000-0000-4000-8000-000000000000 … 000000000069
+  const DEMO_ANN_IDS = Array.from({ length: 70 }, (_, i) =>
+    `de00a000-0000-4000-8000-${String(i).padStart(12, "0")}`
+  );
+  // Known alert IDs: de00a1e7-0000-4000-8000-000000000001 … 000000000005
+  const DEMO_ALERT_IDS = Array.from({ length: 5 }, (_, i) =>
+    `de00a1e7-0000-4000-8000-${String(i + 1).padStart(12, "0")}`
+  );
+
+  await db.auditLog.deleteMany({ where: { userAgent: DEMO_SEED_AGENT } });
+  await db.tenantAlertAcknowledgement.deleteMany({
+    where: { alertId: { in: DEMO_ALERT_IDS } },
+  });
+  await db.annotation.deleteMany({ where: { id: { in: DEMO_ANN_IDS } } });
+  await db.alert.deleteMany({ where: { id: { in: DEMO_ALERT_IDS } } });
+  await db.device.deleteMany({ where: { sku: { startsWith: "DEMO-" } } });
+  await db.user.deleteMany({ where: { auth0UserId: { startsWith: "demo|" } } });
+  // Tenants are NOT deleted here — they are always upserted below, and
+  // deleting a tenant would cascade-delete audit rows from other tables.
+  console.log("🧹  Idempotency: previous demo data removed");
+
+  // ── Resolve existing manufacturers + categories ──────────────────────────
+  const manufacturers = await db.manufacturer.findMany({
+    select: { id: true, name: true },
+  });
+  if (manufacturers.length === 0) {
+    throw new Error("Run the base seed first: pnpm db:seed");
+  }
+  const mfrIds = manufacturers.map((m) => m.id);
+
+  const categories = await db.deviceCategory.findMany({
+    select: { id: true, name: true },
+  });
+  const catByName = Object.fromEntries(categories.map((c) => [c.name, c.id]));
+
+  // ── Demo tenants ──────────────────────────────────────────────────────────
+  const demoTenant1 = await db.tenant.upsert({
+    where:  { slug: "rigshospitalet-demo" },
+    update: {},
+    create: {
+      name:        "Rigshospitalet Demo",
+      slug:        "rigshospitalet-demo",
+      planTier:    "enterprise",
+      baaSignedAt: new Date("2024-06-01"),
+      isActive:    true,
+      settings:    { region: "dk", currency: "DKK", language: "da", demo: true },
+    },
+  });
+
+  const demoTenant2 = await db.tenant.upsert({
+    where:  { slug: "aalborg-university-hospital-demo" },
+    update: {},
+    create: {
+      name:        "Aalborg University Hospital Demo",
+      slug:        "aalborg-university-hospital-demo",
+      planTier:    "standard",
+      baaSignedAt: new Date("2024-07-15"),
+      isActive:    true,
+      settings:    { region: "dk", currency: "DKK", language: "da", demo: true },
+    },
+  });
+  console.log("✅  Demo tenants created");
+
+  // ── Demo users ────────────────────────────────────────────────────────────
+  const demoUsers = [
+    {
+      tenantId:        demoTenant1.id,
+      auth0UserId:     "demo|rigs-safety-001",
+      email:           "anna.larsen@rigshospitalet-demo.dk",
+      fullName:        "Dr. Anna Larsen",
+      role:            "hospital_safety_officer",
+      specialty:       "Patient Safety",
+      verificationTier: 3,
+      subscriptionStatus: "active",
+    },
+    {
+      tenantId:        demoTenant1.id,
+      auth0UserId:     "demo|rigs-surgeon-001",
+      email:           "mikkel.jensen@rigshospitalet-demo.dk",
+      fullName:        "Dr. Mikkel Jensen",
+      role:            "surgeon",
+      specialty:       "Orthopedic Surgery",
+      verificationTier: 2,
+      subscriptionStatus: "active",
+    },
+    {
+      tenantId:        demoTenant1.id,
+      auth0UserId:     "demo|rigs-admin-001",
+      email:           "it.procurement@rigshospitalet-demo.dk",
+      fullName:        "Søren Møller",
+      role:            "it_procurement",
+      specialty:       null,
+      verificationTier: 1,
+      subscriptionStatus: "active",
+    },
+    {
+      tenantId:        demoTenant2.id,
+      auth0UserId:     "demo|aau-surgeon-001",
+      email:           "camilla.nielsen@aau-demo.dk",
+      fullName:        "Dr. Camilla Nielsen",
+      role:            "surgeon",
+      specialty:       "Cardiac Electrophysiology",
+      verificationTier: 2,
+      subscriptionStatus: "active",
+    },
+    {
+      tenantId:        demoTenant2.id,
+      auth0UserId:     "demo|aau-safety-001",
+      email:           "lars.christensen@aau-demo.dk",
+      fullName:        "Lars Christensen",
+      role:            "hospital_safety_officer",
+      specialty:       "Medical Equipment Safety",
+      verificationTier: 1,
+      subscriptionStatus: "active",
+    },
+  ];
+
+  const createdUserIds: string[] = [];
+  for (const u of demoUsers) {
+    const user = await db.user.upsert({
+      where:  { auth0UserId: u.auth0UserId },
+      update: {},
+      create: {
+        ...u,
+        emailVerifiedAt:         new Date("2024-08-01"),
+        verificationApprovedAt:  u.verificationTier >= 2 ? new Date("2024-08-15") : null,
+      },
+    });
+    createdUserIds.push(user.id);
+  }
+  console.log("✅  Demo users: 5 created");
+
+  const [demoSafetyOfficer, demoSurgeon1, , demoSurgeon2] = createdUserIds;
+
+  // ── 100 demo devices ──────────────────────────────────────────────────────
+  // 40 orthopaedic, 35 cardiac EP, 25 dentistry
+
+  const orthoMfrId  = mfrIds[0];
+  const cardioMfrId = mfrIds[1] ?? mfrIds[0];
+  const dentalMfrId = mfrIds[2] ?? mfrIds[0];
+
+  const orthoCatId  = catByName["Hip Replacement"]  ?? catByName["Joint Replacement"] ?? categories[0].id;
+  const cardioCatId = catByName["Cardiac EP"]        ?? catByName["Cardiovascular"]    ?? categories[0].id;
+  const dentalCatId = catByName["Dental Implants"]   ?? catByName["Dentistry"]         ?? categories[0].id;
+
+  const orthoNames = [
+    "TitanFlex Hip Stem 1.0",  "TitanFlex Hip Stem 1.5",  "TitanFlex Hip Stem 2.0",
+    "OsteoLock Acetabular Cup A", "OsteoLock Acetabular Cup B", "OsteoLock Acetabular Cup C",
+    "KneeAlign Total Knee System S", "KneeAlign Total Knee System M", "KneeAlign Total Knee System L",
+    "BioShield Femoral Nail 9mm", "BioShield Femoral Nail 10mm", "BioShield Femoral Nail 11mm",
+    "SpineCore TLIF Cage 10mm", "SpineCore TLIF Cage 12mm", "SpineCore TLIF Cage 14mm",
+    "MotionTech Shoulder Glenoid A", "MotionTech Shoulder Glenoid B",
+    "MotionTech Humeral Stem S", "MotionTech Humeral Stem M", "MotionTech Humeral Stem L",
+    "ActiveElbow Radial Head 22mm", "ActiveElbow Radial Head 24mm",
+    "AnkleLink Tibial Component S", "AnkleLink Tibial Component M",
+    "AnkleLink Talar Component S", "AnkleLink Talar Component M",
+    "PatellaTrack Resurfacing Disc",
+    "OrthoScrew Cortical 3.5mm", "OrthoScrew Cortical 4.5mm", "OrthoScrew Cancellous 6.5mm",
+    "LockPlate Distal Radius DRP-1", "LockPlate Distal Radius DRP-2",
+    "LockPlate Proximal Humerus PHP-1",
+    "CerviCore ACDF Cage 5mm", "CerviCore ACDF Cage 6mm", "CerviCore ACDF Cage 7mm",
+    "PedicleScrewPro 4.5×35", "PedicleScrewPro 5.5×40", "PedicleScrewPro 6.5×45",
+    "TraumaPlate Femur F-10",
+  ];
+
+  const cardioNames = [
+    "CardioMap EP Catheter 4mm", "CardioMap EP Catheter 8mm",
+    "CardioMap Irrigated Ablation Catheter",
+    "ElectraNav 3D Mapping Catheter",
+    "PulseGuide Diagnostic Catheter 5F", "PulseGuide Diagnostic Catheter 6F",
+    "CryoStar Cryo-Ablation Catheter",
+    "SignalPath Circular Mapping Catheter",
+    "SinusDrive Sinus Node Catheter",
+    "PaceLead Ventricular RV-1", "PaceLead Ventricular RV-2",
+    "PaceLead Atrial RA-1", "PaceLead Atrial RA-2",
+    "ImpulseGen ICD Lead 65cm", "ImpulseGen ICD Lead 75cm",
+    "BiVPace Biventricular Lead Set",
+    "AFMap AF Ablation Index Catheter",
+    "PVArc Pulmonary Vein Arch Catheter",
+    "ChannelNav Coronary Sinus Catheter",
+    "MicroPace Ultra-High Density Catheter",
+    "CardioPatch Epicardial Mapping Grid",
+    "OmniSteer Steerable Sheath 8.5F", "OmniSteer Steerable Sheath 10F",
+    "TransSeptal FastTrack Needle",
+    "HeartSync Intracardiac Echo Catheter",
+    "RhythmLock Cryoballoon 23mm", "RhythmLock Cryoballoon 28mm",
+    "ElectroTank External Patch Array",
+    "VascAccess Transseptal Access Sheath 8F",
+    "SignalPath Basket Catheter 60mm",
+    "PulseGuide Deflectable Quad Catheter",
+    "CardioMap NavX-Compatible Catheter",
+    "ElectraNav Force-Sensing Module",
+    "SinusDrive His-Bundle Lead",
+    "PaceLead Subcutaneous ICD Lead",
+  ];
+
+  const dentalNames = [
+    "OsseoFit Implant 3.3×10mm", "OsseoFit Implant 3.3×12mm",
+    "OsseoFit Implant 4.1×10mm", "OsseoFit Implant 4.1×12mm", "OsseoFit Implant 4.1×14mm",
+    "OsseoFit Implant 4.8×10mm", "OsseoFit Implant 4.8×12mm",
+    "BoneAnchor Zirconia Implant 4mm",
+    "PearlCrown Lithium Disilicate Crown",
+    "PearlCrown Zirconia Crown",
+    "AlignPro Clear Aligner System",
+    "PerioMend Bone Graft Putty",
+    "PerioMend Membrane 25×25mm",
+    "OrthoWire Nickel-Titanium Arch 0.016",
+    "OrthoWire Stainless Arch 0.019×0.025",
+    "BracketPro Ceramic Bracket Set",
+    "BracketPro Metal Bracket Set",
+    "SurgicalDrill Implant Kit 3.3mm",
+    "SurgicalDrill Implant Kit 4.1mm",
+    "SurgicalDrill Implant Kit 4.8mm",
+    "GumShield Mucogingival Matrix",
+    "SinusGraft Bone Substitute 5cc",
+    "HealAbutment 4.1×5mm", "HealAbutment 4.1×7mm",
+    "TemporisCAD PMMA Block 55×40mm",
+  ];
+
+  const allDeviceGroups: { names: string[]; mfrId: string; catId: string }[] = [
+    { names: orthoNames,  mfrId: orthoMfrId,  catId: orthoCatId  },
+    { names: cardioNames, mfrId: cardioMfrId, catId: cardioCatId },
+    { names: dentalNames, mfrId: dentalMfrId, catId: dentalCatId },
+  ];
+
+  const createdDeviceIds: string[] = [];
+  let deviceIndex = 0;
+  for (const group of allDeviceGroups) {
+    for (const name of group.names) {
+      const sku = `DEMO-${String(++deviceIndex).padStart(4, "0")}`;
+      const device = await db.device.upsert({
+        where:  { sku_manufacturerId: { sku, manufacturerId: group.mfrId } },
+        update: {},
+        create: {
+          sku,
+          name,
+          manufacturerId:   group.mfrId,
+          categoryId:       group.catId,
+          approvalStatus:   "approved",
+          regulatoryStatus: "510k_cleared",
+          fdA510kNumber:    `K${200000 + deviceIndex}`,
+          description:      `Demo device — ${name}. For sales demonstration only.`,
+          version:          "1.0",
+          sterilizationMethod: "ETO",
+          dimensionsMm:     { length: 20 + deviceIndex % 30, width: 10, height: 5 },
+          createdAt:        new Date(Date.now() - deviceIndex * 86_400_000),
+        },
+      });
+      createdDeviceIds.push(device.id);
+    }
+  }
+  console.log(`✅  Demo devices: ${createdDeviceIds.length} created`);
+
+  // ── 70 demo annotations ───────────────────────────────────────────────────
+  const annotationTitles = [
+    "Excellent primary stability with press-fit technique",
+    "Caution: cement mantle thickness varies by batch",
+    "Optimal irrigation flow rate for ablation catheter",
+    "Case report: unusual deflection at high-torque",
+    "Implant surface finish correlates with osseointegration",
+    "Clinical note: sizing guide requires intraop adjustment",
+    "Batch B2024 shows consistent pull-out strength",
+    "Torque recommendation for abutment placement",
+    "Mapping accuracy verified against CT ground truth",
+    "MRI compatibility confirmed at 1.5T and 3T",
+  ];
+
+  const annotationBodies: string[] = [
+    "Based on 47 consecutive cases, press-fit technique with 0.5mm underreaming achieves >90% primary stability on DXA follow-up at 6 weeks.",
+    "Lots B12–B18 show a 0.8mm variance in cement mantle. Recommend templating with 1mm extra offset for cemented fixation to maintain 2–4mm ideal mantle.",
+    "At 25 mL/min irrigation, lesion formation is consistent with predicted RF dosimetry. Reducing to 15 mL/min increases contact impedance variability.",
+    "Catheter deflected unexpectedly at >90° torque in 2 of 34 cases. Likely related to vascular anatomy. Recommend pre-procedural CTA review for tortuous vessels.",
+    "SLA-treated surfaces showed 2.3× better osseointegration at 8 weeks vs machined surfaces in our retrospective analysis of 120 implants.",
+    "The manufacturer sizing guide underestimates by ~5% in patients with Dorr Type C femoral morphology. Intraoperative trialing with the next size up is recommended.",
+    "Pull-out testing of batch B2024 (n=24) shows mean 3,412N ± 180N, within spec. Previous batch B2023 showed 3,100N ± 320N variance worth monitoring.",
+    "Torque of 30–35 Ncm is optimal for this abutment diameter. Below 25 Ncm correlates with early micro-motion and bone loss in our 18-month follow-up.",
+    "Registration error of <0.8mm against CT in 98.2% of cases using landmark-based registration protocol. Recommend 6+ landmarks for complex anatomy.",
+    "Passed MRI safety testing per IEC 62570. Confirmed non-significant heating (<0.5°C) at 3T using standard birdcage coil protocols.",
+  ];
+
+  const annotationTypes = ["clinical_note", "safety_alert", "technique_tip", "case_report"] as const;
+  const severities = ["low", "medium", "high"] as const;
+
+  for (let i = 0; i < 70; i++) {
+    const deviceId = createdDeviceIds[i % createdDeviceIds.length];
+    const authorId = createdUserIds[i % createdUserIds.length];
+    const tenantId = i % 2 === 0 ? demoTenant1.id : demoTenant2.id;
+    await db.annotation.upsert({
+      where: { id: `de00a000-0000-4000-8000-${String(i).padStart(12, "0")}` },
+      update: {},
+      create: {
+        id:             `de00a000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+        deviceId,
+        authorId,
+        tenantId,
+        title:          annotationTitles[i % annotationTitles.length] + ` (${i + 1})`,
+        body:           annotationBodies[i % annotationBodies.length],
+        annotationType: annotationTypes[i % annotationTypes.length],
+        severity:       severities[i % severities.length],
+        visibility:     i % 3 === 0 ? "tenant" : "platform",
+        status:         "published",
+        procedureType:  ["THA", "PVI", "Implant Placement"][i % 3],
+        patientCount:   (i % 10) + 5,
+        procedureDate:  new Date(Date.now() - i * 5 * 86_400_000),
+        publishedAt:    new Date(Date.now() - i * 5 * 86_400_000),
+      },
+    });
+  }
+  console.log("✅  Demo annotations: 70 created");
+
+  // ── 5 demo alerts (2 critical, 3 medium, 1 acknowledged) ─────────────────
+  const demoAlerts = [
+    {
+      id:          "de00a1e7-0000-4000-8000-000000000001",
+      title:       "Class I Recall — CardioMap Irrigated Ablation Catheter",
+      summary:     "Potential catheter tip separation under extreme deflection in lot C2024 (batches 001–040). All affected units must be quarantined immediately.",
+      alertType:   "recall",
+      severity:    "critical",
+      source:      "FDA MedWatch",
+      externalId:  "RECALL-2024-CM-001",
+      publishedAt: new Date(Date.now() - 5 * 86_400_000),
+    },
+    {
+      id:          "de00a1e7-0000-4000-8000-000000000002",
+      title:       "URGENT Field Safety Notice — OsseoFit Implant 4.1 Series",
+      summary:     "Batch QC anomaly: surface oxide layer thickness below specification for OsseoFit 4.1×10mm and 4.1×12mm (lot OFD-2024-Q3). May reduce osseointegration.",
+      alertType:   "safety_notice",
+      severity:    "critical",
+      source:      "Manufacturer (OrthoTech Solutions)",
+      externalId:  "FSN-2024-OFD-Q3",
+      publishedAt: new Date(Date.now() - 3 * 86_400_000),
+    },
+    {
+      id:          "de00a1e7-0000-4000-8000-000000000003",
+      title:       "Advisory — TitanFlex Hip Stem 1.5 Taper Junction",
+      summary:     "Increased corrosion observed at modular taper junction in 12/3,200 retrievals. Recommend enhanced surveillance at 2-year follow-up for patients implanted 2021–2023.",
+      alertType:   "advisory",
+      severity:    "medium",
+      source:      "EUDAMED",
+      externalId:  "EUDA-2024-TF-15",
+      publishedAt: new Date(Date.now() - 14 * 86_400_000),
+    },
+    {
+      id:          "de00a1e7-0000-4000-8000-000000000004",
+      title:       "Product Recall — PaceLead Atrial RA-2 Insulation Defect",
+      summary:     "Microcracking in PTFE insulation jacket reported in 7 field returns from lot RA-2-2023-D. Potential for early lead failure. Mandatory patient notification required.",
+      alertType:   "recall",
+      severity:    "medium",
+      source:      "FDA MedWatch",
+      externalId:  "RECALL-2024-PL-RA2",
+      publishedAt: new Date(Date.now() - 21 * 86_400_000),
+    },
+    {
+      id:          "de00a1e7-0000-4000-8000-000000000005",
+      title:       "Safety Communication — AlignPro Aligner Trimming Guidelines Update",
+      summary:     "Updated trimming guide released to prevent unintended attachment interference. No recall. Software update v3.2.1 available for the digital workflow tool.",
+      alertType:   "safety_notice",
+      severity:    "medium",
+      source:      "Manufacturer (DentalTech Pro)",
+      externalId:  "SC-2024-AP-TRIM",
+      publishedAt: new Date(Date.now() - 30 * 86_400_000),
+    },
+  ];
+
+  for (const alert of demoAlerts) {
+    await db.alert.upsert({
+      where:  { id: alert.id },
+      update: {},
+      create: {
+        ...alert,
+        affectedSkus: [],
+      },
+    });
+  }
+
+  // Acknowledge alert 5 for demo tenant 1
+  if (demoSafetyOfficer) {
+    await db.tenantAlertAcknowledgement.upsert({
+      where: {
+        alertId_tenantId: {
+          tenantId: demoTenant1.id,
+          alertId:  "de00a1e7-0000-4000-8000-000000000005",
+        },
+      },
+      update: {},
+      create: {
+        tenantId:          demoTenant1.id,
+        alertId:           "de00a1e7-0000-4000-8000-000000000005",
+        acknowledgedById:  demoSafetyOfficer,
+        notes:             "Reviewed with dental equipment team. Software update scheduled for next maintenance window.",
+        acknowledgedAt:    new Date(Date.now() - 25 * 86_400_000),
+      },
+    });
+  }
+  console.log("✅  Demo alerts: 5 created (1 acknowledged)");
+
+  // ── 500 audit log entries spanning 30 days ────────────────────────────────
+  const auditActions = [
+    "device.viewed", "device.approved", "device.rejected",
+    "annotation.created", "annotation.voted", "annotation.flagged", "annotation.endorsed",
+    "alert.viewed", "alert.acknowledged",
+    "document.downloaded", "document.uploaded",
+    "admin.export", "admin.user_promoted", "admin.stats_viewed",
+    "org.member_invited", "org.member_removed", "org.role_changed",
+  ];
+  const auditResourceTypes = [
+    "device", "device", "device",
+    "annotation", "annotation", "annotation", "annotation",
+    "alert", "alert",
+    "document", "document",
+    "audit_log", "user", "stats",
+    "invitation", "user", "user",
+  ];
+  const sampleIps = [
+    "192.168.1.10", "192.168.1.11", "10.0.0.5",
+    "172.16.0.2", "203.0.113.45",
+  ];
+
+  const auditRows: {
+    userId:       string;
+    tenantId:     string;
+    userEmail:    string;
+    userRole:     string;
+    action:       string;
+    resourceType: string;
+    resourceId:   string;
+    responseStatus: number;
+    ipAddress:    string;
+    userAgent:    string;
+    createdAt:    Date;
+  }[] = [];
+
+  for (let i = 0; i < 500; i++) {
+    const actionIdx   = i % auditActions.length;
+    const userIdx     = i % demoUsers.length;
+    const deviceIdx   = i % createdDeviceIds.length;
+    const daysAgo     = Math.floor(i / 17); // spreads 500 events across ~30 days
+    auditRows.push({
+      userId:        createdUserIds[userIdx],
+      tenantId:      demoUsers[userIdx].tenantId,
+      userEmail:     demoUsers[userIdx].email,
+      userRole:      demoUsers[userIdx].role,
+      action:        auditActions[actionIdx],
+      resourceType:  auditResourceTypes[actionIdx],
+      resourceId:    createdDeviceIds[deviceIdx],
+      responseStatus: 200,
+      ipAddress:     sampleIps[i % sampleIps.length],
+      userAgent:     DEMO_SEED_AGENT,
+      createdAt:     new Date(Date.now() - daysAgo * 86_400_000 - (i % 86_400) * 1_000),
+    });
+  }
+
+  // Insert in batches of 100
+  for (let start = 0; start < auditRows.length; start += 100) {
+    await db.auditLog.createMany({
+      data:          auditRows.slice(start, start + 100),
+      skipDuplicates: true,
+    });
+  }
+  console.log("✅  Demo audit log: 500 entries created (spanning ~30 days)");
+
+  // ── Summary ────────────────────────────────────────────────────────────────
+  console.log("\n🎉  Demo data seed complete!\n");
+  console.log("Demo tenant IDs:");
+  console.log(`  RIGSHOSPITALET_DEMO: ${demoTenant1.id}`);
+  console.log(`  AALBORG_DEMO:        ${demoTenant2.id}`);
+  console.log("\nDemo users (password: use Auth0 dashboard):");
+  demoUsers.forEach((u) => console.log(`  ${u.role.padEnd(26)} ${u.email}`));
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+
+const isDemoMode = process.argv.includes("--demo-data");
+
 main()
+  .then(async () => {
+    if (isDemoMode) {
+      await seedDemoData();
+    }
+  })
   .catch((e) => { console.error("Seed failed:", e); process.exit(1); })
   .finally(() => db.$disconnect());

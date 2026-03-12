@@ -1,9 +1,23 @@
 import type {
-  Device, DeviceListResponse, Alert, AuditLog, Annotation,
+  Device, DeviceListResponse, Alert, AlertWithStatus, AlertAcknowledgement,
+  AuditLog, Annotation,
   IngestionRun, TenantDataSources, GudidDeviceInfo,
   AnnotationVote, Comment, AnnotationFlag, AnnotationTag,
   User, UserReputation,
 } from "@logiqo/shared";
+
+// ── Organisation types ────────────────────────────────────────────────────────
+
+export interface Invitation {
+  id: string;
+  email: string;
+  role: string;
+  expiresAt: string;
+  createdAt: string;
+  invitedBy: { fullName: string; email: string } | null;
+}
+
+export type OrgUser = User & { userReputation?: { totalScore: number } | null };
 
 // Server components reach Fastify directly; browser client components use the
 // Next.js rewrite proxy (/api/backend → localhost:8080) to avoid cross-port issues.
@@ -153,12 +167,12 @@ export const apiClient = {
   // ── Alerts ───────────────────────────────────────────────────────────────────
   alerts: {
     list: (params?: { page?: number; limit?: number; status?: "active" | "acknowledged" }) =>
-      apiFetch<{ data: Alert[]; total: number; page: number; limit: number }>(
+      apiFetch<{ data: AlertWithStatus[]; total: number; page: number; limit: number }>(
         `/alerts${buildQs(params ?? {})}`
       ),
 
     acknowledge: (alertId: string, notes?: string) =>
-      apiFetch<void>(`/alerts/${alertId}/acknowledge`, {
+      apiFetch<AlertAcknowledgement>(`/alerts/${alertId}/acknowledge`, {
         method: "POST",
         body:   JSON.stringify({ notes }),
       }),
@@ -305,9 +319,17 @@ export const apiClient = {
     /**
      * Open the Stripe Billing Portal for an existing subscriber.
      * Returns a Stripe-hosted portal URL; the caller should redirect.
+     *
+     * Sends an explicit empty JSON body ({}) so that Fastify's strict JSON
+     * body parser never sees a bodyless POST — avoids any 415/400 if the
+     * route schema is tightened in future. The apiFetch wrapper only attaches
+     * Content-Type when body != null, so passing body here is required.
      */
     portal: () =>
-      apiFetch<{ url: string }>("/subscribe/portal", { method: "POST" }),
+      apiFetch<{ url: string }>("/subscribe/portal", {
+        method: "POST",
+        body:   JSON.stringify({}),
+      }),
   },
 
   // ── Admin ────────────────────────────────────────────────────────────────────
@@ -318,10 +340,32 @@ export const apiClient = {
     pendingDevices: (params?: { page?: number; limit?: number }) =>
       apiFetch<DeviceListResponse>(`/admin/devices/pending${buildQs(params ?? {})}`),
 
-    auditLogs: (params?: { page?: number; limit?: number }) =>
-      apiFetch<{ data: AuditLog[]; total: number }>(
+    auditLogs: (params?: {
+      page?:         number;
+      limit?:        number;
+      userId?:       string;
+      tenantId?:     string;
+      action?:       string;
+      resourceType?: string;
+      startDate?:    string;
+      endDate?:      string;
+    }) =>
+      apiFetch<{ data: AuditLog[]; total: number; page: number; limit: number }>(
         `/admin/audit-logs${buildQs(params ?? {})}`
       ),
+
+    /** Returns a URL string — caller should navigate to it to trigger CSV download. */
+    auditLogsExportUrl: (params?: {
+      userId?:       string;
+      tenantId?:     string;
+      action?:       string;
+      resourceType?: string;
+      startDate?:    string;
+      endDate?:      string;
+    }): string => {
+      const qs = buildQs(params ?? {});
+      return `${API_BASE}/admin/audit-logs/export${qs}`;
+    },
 
     approveDevice: (deviceId: string) =>
       apiFetch<void>(`/admin/devices/${deviceId}/approve`, { method: "POST" }),
@@ -380,6 +424,51 @@ export const apiClient = {
         // "reject" is the correct schema value — moderateAnnotationSchema uses
         // z.enum(["approve", "reject"]). The reason text maps to reviewNotes.
         body:   JSON.stringify({ action: "reject", reviewNotes: reason }),
+      }),
+  },
+
+  // ── Organizations ────────────────────────────────────────────────────────────
+  organizations: {
+    /** List active (non-deleted) users in the tenant. */
+    listUsers: (params?: { page?: number; limit?: number }) =>
+      apiFetch<{ data: OrgUser[]; total: number; page: number; limit: number }>(
+        `/organizations/users${buildQs(params ?? {})}`
+      ),
+
+    /** Change a user's role within the tenant. */
+    changeUserRole: (userId: string, role: string) =>
+      apiFetch<OrgUser>(`/organizations/users/${userId}/role`, {
+        method: "PATCH",
+        body:   JSON.stringify({ role }),
+      }),
+
+    /** Soft-delete a user from the tenant. */
+    removeUser: (userId: string) =>
+      apiFetch<{ message: string }>(`/organizations/users/${userId}`, {
+        method: "DELETE",
+      }),
+
+    /** List pending (not accepted, not revoked, not expired) invitations. */
+    listInvitations: () =>
+      apiFetch<{ data: Invitation[]; total: number }>("/organizations/invitations"),
+
+    /** Send an invitation email to the given address. */
+    invite: (body: { email: string; role: string }) =>
+      apiFetch<{
+        invitationId: string;
+        email:        string;
+        role:         string;
+        expiresAt:    string;
+        emailSent:    boolean;
+      }>("/organizations/invite", {
+        method: "POST",
+        body:   JSON.stringify(body),
+      }),
+
+    /** Revoke a pending invitation so its link becomes invalid. */
+    revokeInvitation: (invitationId: string) =>
+      apiFetch<{ message: string }>(`/organizations/invitations/${invitationId}`, {
+        method: "DELETE",
       }),
   },
 };

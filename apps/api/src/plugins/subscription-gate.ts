@@ -162,6 +162,7 @@ const subscriptionGateImpl: FastifyPluginAsync = async (fastify) => {
         if (!allowed) {
           return reply.code(402).send({
             error:      "Active subscription required",
+            code:       "SUBSCRIPTION_REQUIRED",
             redirectTo: "/subscribe",
           });
         }

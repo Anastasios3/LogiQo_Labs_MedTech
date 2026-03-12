@@ -9,6 +9,7 @@ export interface AuditLog {
   resourceId?: string | null;
   oldValues?: Record<string, unknown> | null;
   newValues?: Record<string, unknown> | null;
+  responseStatus?: number | null;
   ipAddress?: string | null;
   userAgent?: string | null;
   requestId?: string | null;

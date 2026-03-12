@@ -29,6 +29,22 @@ const app = Fastify({
       process.env.NODE_ENV === "development"
         ? { target: "pino-pretty" }
         : undefined,
+    // Redact sensitive fields from all structured log lines.
+    // Prevents credentials and auth tokens from appearing in CloudWatch / Datadog.
+    redact: {
+      paths: [
+        "req.headers.authorization",
+        "req.headers.cookie",
+        "req.body.password",
+        "req.body.currentPassword",
+        "req.body.newPassword",
+        "req.body.token",
+        "req.body.secret",
+        "req.body.npiNumber",
+        "req.body.stripeCustomerId",
+      ],
+      censor: "[REDACTED]",
+    },
   },
   trustProxy: true,
 });

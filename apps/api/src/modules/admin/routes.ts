@@ -579,4 +579,76 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     "/devices/:id/reject",
     async (request, reply) => handleReject(request, reply)
   );
+
+  // ── PATCH /admin/annotations/:id/moderate ─────────────────────────────────
+  //
+  // Moderation queue action for flagged annotations.
+  //
+  // Body:
+  //   action:      "approve" — restore the annotation to published status
+  //                "reject"  — permanently remove the annotation (sets status "removed")
+  //   reviewNotes: optional free-text rationale stored in the audit trail
+  //
+  // RBAC: hospital_safety_officer + system_admin (inherited from route scope hook)
+  //
+  // Annotations are immutable once published — the "approve" action restores
+  // status to "published" without modifying content. "reject" sets status to
+  // "removed" and strips platform visibility, making it inaccessible to all
+  // users. Both outcomes are recorded in the immutable audit log.
+  //
+  const moderateBodySchema = z.object({
+    action:      z.enum(["approve", "reject"]),
+    reviewNotes: z.string().max(2000).trim().optional(),
+  });
+
+  fastify.patch<{ Params: { id: string } }>(
+    "/annotations/:id/moderate",
+    async (request, reply) => {
+      const { id }   = request.params;
+      const body     = moderateBodySchema.parse(request.body);
+
+      const annotation = await fastify.db.annotation.findUnique({
+        where:  { id },
+        select: { id: true, status: true, title: true, tenantId: true },
+      });
+
+      if (!annotation) {
+        return reply.code(404).send({ message: "Annotation not found" });
+      }
+
+      // Only flagged or under_review annotations are valid moderation targets
+      if (!["flagged", "under_review"].includes(annotation.status)) {
+        return reply.code(409).send({
+          message: `Annotation is already "${annotation.status}" — only flagged or under_review annotations can be moderated`,
+        });
+      }
+
+      const newStatus = body.action === "approve" ? "published" : "removed";
+
+      const updated = await fastify.db.annotation.update({
+        where: { id },
+        data: {
+          status:     newStatus,
+          // Rejected annotations lose platform-wide visibility
+          ...(body.action === "reject" ? { visibility: "tenant" } : {}),
+        },
+        select: { id: true, status: true, title: true },
+      });
+
+      await fastify.audit(request, {
+        action:       `annotation.${body.action === "approve" ? "moderation_approved" : "moderation_rejected"}`,
+        resourceType: "annotation",
+        resourceId:   id,
+        oldValues:    { status: annotation.status },
+        newValues:    {
+          status:      newStatus,
+          action:      body.action,
+          reviewNotes: body.reviewNotes ?? null,
+          moderatedBy: request.user.email,
+        },
+      });
+
+      return reply.code(200).send(updated);
+    }
+  );
 };
