@@ -36,20 +36,20 @@ jobs:
           cache: pnpm
 
       # ── Install dependencies ───────────────────────────────────────────────
+      # postinstall in packages/db runs `prisma generate` automatically.
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       # ── Build the Next.js app ─────────────────────────────────────────────
-      # We build first so the webServer in playwright.config.ts can use `next start`
-      # instead of the slower `next dev`.
+      # Pre-build so playwright.config.ts can serve with `next start` (faster
+      # start-up than `next dev`, and production-realistic for E2E).
       - name: Build Next.js app
         working-directory: apps/web
         run: pnpm build
         env:
-          # Auth0 must be empty so dev-mode bypass activates
+          # Auth0 must be empty so dev-mode bypass activates at runtime
           AUTH0_SECRET: ""
           NEXT_PUBLIC_API_URL: "http://localhost:8080"
-          # Skip actual Auth0 initialisation during build
           AUTH0_BASE_URL: "http://localhost:3000"
           AUTH0_ISSUER_BASE_URL: "https://placeholder.auth0.com"
           AUTH0_CLIENT_ID: "placeholder"
@@ -57,6 +57,7 @@ jobs:
           AUTH0_AUDIENCE: "https://api.logiqo.io"
 
       # ── Install Playwright browsers ────────────────────────────────────────
+      # Only Chromium in CI — playwright.config.ts filters to chromium when CI=true.
       - name: Install Playwright browsers
         working-directory: apps/web
         run: pnpm exec playwright install --with-deps chromium
@@ -69,16 +70,24 @@ jobs:
           CI: "true"
           AUTH0_SECRET: ""
           NEXT_PUBLIC_API_URL: "http://localhost:8080"
+          AUTH0_BASE_URL: "http://localhost:3000"
+          AUTH0_ISSUER_BASE_URL: "https://placeholder.auth0.com"
+          AUTH0_CLIENT_ID: "placeholder"
+          AUTH0_CLIENT_SECRET: "placeholder"
+          AUTH0_AUDIENCE: "https://api.logiqo.io"
 
       # ── Upload artifacts ───────────────────────────────────────────────────
-      - name: Upload Playwright report
+      # Blob reporter writes per-shard data to blob-report/; the merge-reports
+      # job reassembles them into a single HTML report.
+      - name: Upload blob report
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: playwright-report-${{ strategy.job-index }}
-          path: apps/web/playwright-report/
-          retention-days: 14
+          name: blob-report-${{ strategy.job-index }}
+          path: apps/web/blob-report/
+          retention-days: 3
 
+      # Traces, screenshots, and videos for failing tests land in test-results/.
       - name: Upload test results (on failure)
         uses: actions/upload-artifact@v4
         if: failure()
@@ -87,7 +96,7 @@ jobs:
           path: apps/web/test-results/
           retention-days: 7
 
-  # ── Merge sharded HTML reports ─────────────────────────────────────────────
+  # ── Merge sharded blob reports into a single HTML report ───────────────────
   merge-reports:
     name: Merge Playwright reports
     needs: [e2e]
@@ -110,14 +119,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Download all report artifacts
+      - name: Download all blob report artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: playwright-report-*
+          pattern: blob-report-*
           merge-multiple: true
           path: all-blob-reports
 
-      - name: Merge HTML reports
+      - name: Merge into HTML report
         working-directory: apps/web
         run: pnpm exec playwright merge-reports --reporter html ../all-blob-reports
 
