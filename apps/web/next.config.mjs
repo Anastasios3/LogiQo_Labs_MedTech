@@ -1,6 +1,20 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   transpilePackages: ["@logiqo/shared"],
+
+  // Allow webpack to resolve .ts/.tsx files when an import uses a .js extension.
+  // This is required for ESM-first workspace packages (@logiqo/shared) that use
+  // TypeScript's recommended "import './foo.js'" pattern — TypeScript resolves
+  // './foo.js' to './foo.ts' at compile time, but webpack sees the literal '.js'
+  // and fails to find the file unless extensionAlias is configured.
+  webpack(config) {
+    config.resolve.extensionAlias = {
+      ".js":  [".ts", ".js"],
+      ".jsx": [".tsx", ".jsx"],
+    };
+    return config;
+  },
+
   // Proxy /api/backend/* → Fastify API (allows client components to reach the API)
   async rewrites() {
     const apiBase = process.env.INTERNAL_API_URL ?? "http://localhost:8080";
