@@ -581,6 +581,186 @@ export const devicesRoutes: FastifyPluginAsync = async (fastify) => {
     }
   );
 
+  // ── GET /devices/:id/annotations — device-scoped annotation listing ──────────
+  //
+  // Query params:
+  //   severity   — filter by severity level
+  //   visibility — filter by visibility scope (tenant | platform)
+  //   sortBy     — recent (default) | endorsed | severity
+  //   page, limit — pagination
+  //
+  // RLS: tenant users see tenant + platform annotations for this device.
+  //      Individual users (no tenantId) see platform-only annotations.
+  //
+  fastify.get<{ Params: { id: string } }>(
+    "/:id/annotations",
+    async (request, reply) => {
+      const { id }   = request.params;
+      const tenantId = request.user.tenantId;
+
+      const device = await fastify.db.device.findUnique({
+        where:  { id, isActive: true },
+        select: { id: true },
+      });
+      if (!device) return reply.code(404).send({ message: "Device not found" });
+
+      const rawQuery = request.query as Record<string, string>;
+      const query = {
+        severity:   rawQuery.severity   as any || undefined,
+        visibility: rawQuery.visibility as any || undefined,
+        sortBy:     (rawQuery.sortBy ?? "recent") as "recent" | "endorsed" | "severity",
+        page:       Math.max(1, Number(rawQuery.page)  || 1),
+        limit:      Math.min(100, Math.max(1, Number(rawQuery.limit) || 20)),
+      };
+
+      const where: any = {
+        deviceId: id,
+        status:   "published",
+      };
+
+      // Tenant RLS: show tenant-scoped + platform, or platform-only
+      if (tenantId) {
+        where.OR = [
+          { visibility: "platform" },
+          { visibility: "tenant", tenantId },
+        ];
+      } else {
+        where.visibility = "platform";
+      }
+
+      if (query.severity)   where.severity   = query.severity;
+      if (query.visibility) where.visibility = query.visibility;
+
+      // Resolve the requesting user's internal ID for userHasEndorsed check
+      const dbUser = await fastify.db.user.findUnique({
+        where:  { auth0UserId: request.user.sub },
+        select: { id: true },
+      });
+
+      // Use explicit select (not include) so that authorId is never loaded
+      // into the Node.js heap for anonymized annotations.
+      const [annotations, total] = await Promise.all([
+        fastify.db.annotation.findMany({
+          where,
+          select: {
+            id:               true,
+            deviceId:         true,
+            tenantId:         true,
+            annotationType:   true,
+            severity:         true,
+            title:            true,
+            body:             true,
+            procedureType:    true,
+            procedureDate:    true,
+            patientCount:     true,
+            visibility:       true,
+            status:           true,
+            publishedAt:      true,
+            isPublished:      true,
+            isAnonymized:     true,
+            version:          true,
+            parentId:         true,
+            endorsementCount: true,
+            flagCount:        true,
+            createdAt:        true,
+            // authorId intentionally omitted — UUID never loaded for anonymized rows
+            author: {
+              select: { id: true, fullName: true, specialty: true, verificationTier: true },
+            },
+            _count: { select: { comments: true } },
+            tags: {
+              select: {
+                annotationId: true,
+                tagId:        true,
+                tag: { select: { id: true, name: true, slug: true, category: true } },
+              },
+            },
+          },
+        }),
+        fastify.db.annotation.count({ where }),
+      ]);
+
+      // Sort in memory
+      type AnnotationWithIncludes = typeof annotations[0];
+      let sorted: AnnotationWithIncludes[];
+
+      const SEVERITY_ORDER: Record<string, number> = {
+        critical: 4, high: 3, medium: 2, low: 1,
+      };
+
+      switch (query.sortBy) {
+        case "endorsed":
+          sorted = [...annotations].sort((a, b) => b.endorsementCount - a.endorsementCount);
+          break;
+        case "severity":
+          sorted = [...annotations].sort((a, b) =>
+            (SEVERITY_ORDER[b.severity ?? "low"] ?? 0) -
+            (SEVERITY_ORDER[a.severity ?? "low"] ?? 0)
+          );
+          break;
+        case "recent":
+        default:
+          sorted = [...annotations].sort(
+            (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
+          );
+      }
+
+      // Paginate — get the page slice first so we can batch-resolve endorsements
+      const offset         = (query.page - 1) * query.limit;
+      const pageAnnotations = sorted.slice(offset, offset + query.limit);
+      const pageIds         = pageAnnotations.map(a => a.id);
+
+      // Batch-resolve userHasEndorsed: single query for the page, not one per row.
+      const endorsedSet = new Set<string>();
+      if (dbUser && pageIds.length > 0) {
+        const endorsements = await fastify.db.annotationEndorsement.findMany({
+          where:  { userId: dbUser.id, annotationId: { in: pageIds } },
+          select: { annotationId: true },
+        });
+        for (const e of endorsements) endorsedSet.add(e.annotationId);
+      }
+
+      // Serialize — authorId is NOT on the annotation object (excluded from select),
+      // so the UUID never appears in the response body for anonymized rows.
+      const pageSlice = pageAnnotations.map(a => ({
+        id:               a.id,
+        deviceId:         a.deviceId,
+        tenantId:         a.tenantId,
+        annotationType:   a.annotationType,
+        severity:         a.severity,
+        title:            a.title,
+        body:             a.body,
+        procedureType:    a.procedureType,
+        procedureDate:    a.procedureDate ? a.procedureDate.toISOString().split("T")[0] : null,
+        patientCount:     a.patientCount,
+        visibility:       a.visibility,
+        status:           a.status,
+        publishedAt:      a.publishedAt?.toISOString() ?? null,
+        version:          a.version,
+        parentId:         a.parentId,
+        endorsementCount: a.endorsementCount,
+        flagCount:        a.flagCount,
+        commentCount:     a._count.comments,
+        userHasEndorsed:  endorsedSet.has(a.id),
+        // Anonymized rows: return no id field — author UUID stripped entirely
+        author:           a.isAnonymized
+          ? { fullName: "Anonymous", specialty: null, verificationTier: 0 }
+          : a.author,
+        tags:             a.tags,
+        createdAt:        a.createdAt.toISOString(),
+      }));
+
+      await fastify.audit(request, {
+        action:       "device.annotations.listed",
+        resourceType: "annotation",
+        resourceId:   id,
+        newValues:    { severity: query.severity, sortBy: query.sortBy, page: query.page },
+      });
+
+      return { data: pageSlice, total, page: query.page, limit: query.limit };
+    }
+  );
+
   // ── GET /devices/:id/documents/:documentId/url — pre-signed download URL ─────
   fastify.get<{ Params: { id: string; documentId: string } }>(
     "/:id/documents/:documentId/url",

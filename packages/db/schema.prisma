@@ -228,7 +228,10 @@ model Device {
   approvedAt     DateTime?
 
   // Analytics
-  viewCount  Int  @default(0) @map("view_count")
+  viewCount       Int  @default(0) @map("view_count")
+  // Denormalized annotation count — incremented on each published annotation creation.
+  // Allows fast device-level stats without COUNT(*) GROUP BY on the annotations table.
+  annotationCount Int  @default(0) @map("annotation_count")
 
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
@@ -290,10 +293,25 @@ model Annotation {
   isAnonymized Boolean @default(false)
 
   // Moderation
+  // isPublished is the legacy boolean (kept for backwards-compatibility with
+  // existing vote/comment middleware). New code should read/write status instead.
+  // Both are kept in sync: isPublished = (status == 'published').
   isPublished  Boolean   @default(false)
   reviewedById String?   @db.Uuid
   reviewedAt   DateTime?
   reviewNotes  String?
+
+  // Status lifecycle (Phase 6 — replaces plain isPublished for new code paths)
+  status           String    @default("draft")   // draft | published | flagged | removed
+  publishedAt      DateTime?                     @map("published_at")
+  // Snapshot of the most-recent flag reason — written when flagCount crosses
+  // the auto-escalation threshold (>= 3). Moderators see this at a glance.
+  flaggedReason    String?                       @map("flagged_reason")
+
+  // Denormalized counters — updated atomically on each endorse/flag action.
+  // Kept in sync with Prisma _count aggregates; DB is authoritative.
+  endorsementCount Int       @default(0)         @map("endorsement_count")
+  flagCount        Int       @default(0)         @map("flag_count")
 
   // Versioning — annotations are immutable once published; corrections create a new version
   version  Int     @default(1)

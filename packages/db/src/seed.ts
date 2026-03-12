@@ -354,6 +354,9 @@ async function main() {
   await db.annotationVote.deleteMany({});
   await db.annotationTagLink.deleteMany({});
   await db.annotation.deleteMany({});
+  // Reset all device annotation counters — annotations were just deleted above,
+  // so any stale denormalized counts from a previous seed run must be zeroed.
+  await db.device.updateMany({ data: { annotationCount: 0 } });
 
   type AnnInput = {
     deviceSku: string; tenantId: string; authorId: string;
@@ -639,8 +642,13 @@ async function main() {
     },
   ];
 
-  // Create annotations and collect their IDs
+  // Create annotations and collect their IDs.
+  // Also track per-device published annotation counts so we can backfill
+  // the denormalized annotationCount on each Device row — matching exactly
+  // what the API's $transaction increment would produce in production.
   const annotationIds: string[] = [];
+  const deviceAnnotationCounts  = new Map<string, number>(); // deviceId → published count
+
   for (const inp of annotationInputs) {
     const devId = deviceMap[inp.deviceSku];
     if (!devId) continue;
@@ -657,12 +665,22 @@ async function main() {
         patientCount:   inp.patientCount ?? null,
         visibility:     inp.visibility,
         isPublished:    inp.isPublished,
+        // Phase 6: set lifecycle status + publishedAt so the feed query
+        // (which filters on status = 'published') returns these rows.
+        // Without this the default 'draft' status hides all seed annotations.
+        status:         inp.isPublished ? "published" : "draft",
+        publishedAt:    inp.isPublished ? (inp.reviewedAt ?? new Date()) : null,
         reviewedById:   inp.reviewedById ?? null,
         reviewedAt:     inp.reviewedAt ?? null,
         version:        1,
       },
     });
     annotationIds.push(ann.id);
+
+    // Accumulate per-device count for published annotations only
+    if (inp.isPublished) {
+      deviceAnnotationCounts.set(devId, (deviceAnnotationCounts.get(devId) ?? 0) + 1);
+    }
 
     // Attach tags
     if (inp.tags?.length) {
@@ -676,7 +694,16 @@ async function main() {
       }
     }
   }
-  console.log(`✅  Annotations: ${annotationIds.length} seeded`);
+
+  // Backfill annotationCount on each device that received published annotations.
+  // Devices with zero published annotations keep the 0 set by the reset above.
+  for (const [deviceId, count] of deviceAnnotationCounts) {
+    await db.device.update({
+      where: { id: deviceId },
+      data:  { annotationCount: count },
+    });
+  }
+  console.log(`✅  Annotations: ${annotationIds.length} seeded (annotationCount backfilled on ${deviceAnnotationCounts.size} devices)`);
 
   // ── Votes on published annotations ────────────────────────────────────────
   // Only tier 2 and 3 users can vote (tiers 0 and 1 skipped)

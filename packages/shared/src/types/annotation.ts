@@ -7,6 +7,8 @@ export type AnnotationType =
 
 export type AnnotationSeverity = "low" | "medium" | "high" | "critical";
 
+export type AnnotationStatus = "draft" | "published" | "flagged" | "removed";
+
 export interface Annotation {
   id: string;
   deviceId: string;
@@ -19,7 +21,12 @@ export interface Annotation {
   procedureDate?: string | null;
   patientCount?: number | null;
   visibility: "tenant" | "platform";
+  /** Legacy boolean — kept for backwards compat. Prefer `status`. */
   isPublished: boolean;
+  /** Lifecycle status (Phase 6). draft | published | flagged | removed */
+  status: AnnotationStatus;
+  publishedAt?: string | null;
+  flaggedReason?: string | null;
   version: number;
   parentId?: string | null;
   author?: {
@@ -40,7 +47,12 @@ export interface Annotation {
     votes?: number;
     comments?: number;
   };
-  endorsementCount?: number;
+  /** Denormalized endorsement counter — updated atomically on each endorse action */
+  endorsementCount: number;
+  /** Denormalized flag counter — triggers auto-escalation at >= 3 */
+  flagCount: number;
+  /** Whether the requesting user has endorsed this annotation */
+  userHasEndorsed?: boolean;
   /** Weighted vote score (used for ranking) */
   voteScore?: number;
   /** User's own vote on this annotation (-1, 0, or +1) */

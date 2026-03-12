@@ -374,10 +374,91 @@ export const telemetryRoutes: FastifyPluginAsync = async (fastify) => {
   );
 
   // ════════════════════════════════════════════════════════════════════════════
+  // ENDORSEMENTS
+  // ════════════════════════════════════════════════════════════════════════════
+
+  // POST /annotations/:id/endorse — endorse an annotation (tier 2+ only)
+  //
+  // Idempotency: returns 409 if the user already endorsed this annotation.
+  // Increments annotation.endorsementCount atomically in the same transaction.
+  // Authors cannot endorse their own annotations (422).
+  //
+  fastify.post<{ Params: { id: string } }>(
+    "/:id/endorse",
+    async (request, reply) => {
+      const user = await getUser(request.user.sub);
+      if (!user) return reply.code(401).send({ message: "User not found" });
+
+      if (user.verificationTier < 2) {
+        return reply.code(403).send({
+          message: "NPI-verified clinicians (tier 2+) may endorse annotations.",
+        });
+      }
+
+      const annotationId = request.params.id;
+
+      const annotation = await fastify.db.annotation.findUnique({
+        where:  { id: annotationId },
+        select: { id: true, status: true, authorId: true, endorsementCount: true },
+      });
+      if (!annotation || annotation.status !== "published") {
+        return reply.code(404).send({ message: "Annotation not found" });
+      }
+
+      // Authors cannot endorse their own annotation
+      if (annotation.authorId === user.id) {
+        return reply.code(422).send({ message: "Cannot endorse your own annotation." });
+      }
+
+      // Idempotency check
+      const existing = await fastify.db.annotationEndorsement.findUnique({
+        where: { annotationId_userId: { annotationId, userId: user.id } },
+      });
+      if (existing) {
+        return reply.code(409).send({
+          message:          "You have already endorsed this annotation.",
+          endorsementCount: annotation.endorsementCount,
+        });
+      }
+
+      // Create endorsement record + increment counter atomically
+      const [, updated] = await fastify.db.$transaction([
+        fastify.db.annotationEndorsement.create({
+          data: { annotationId, userId: user.id },
+        }),
+        fastify.db.annotation.update({
+          where:  { id: annotationId },
+          data:   { endorsementCount: { increment: 1 } },
+          select: { endorsementCount: true },
+        }),
+      ]);
+
+      await fastify.audit(request, {
+        action:       "annotation.endorsed",
+        resourceType: "annotation",
+        resourceId:   annotationId,
+        newValues:    { endorsementCount: updated.endorsementCount },
+      });
+
+      return reply.code(201).send({ endorsementCount: updated.endorsementCount });
+    },
+  );
+
+  // ════════════════════════════════════════════════════════════════════════════
   // FLAGS
   // ════════════════════════════════════════════════════════════════════════════
 
+  // Auto-escalation threshold: when flagCount reaches this value the annotation
+  // is moved to status="flagged" for moderator review without manual action.
+  const FLAG_ESCALATION_THRESHOLD = 3;
+
   // POST /annotations/:id/flags — flag annotation
+  //
+  // Phase 6 additions:
+  //   • Increments annotation.flagCount atomically
+  //   • When flagCount >= FLAG_ESCALATION_THRESHOLD and status === "published",
+  //     sets status="flagged" and snapshots flaggedReason for quick triage
+  //
   fastify.post<{ Params: { id: string } }>(
     "/:id/flags",
     async (request, reply) => {
@@ -398,23 +479,70 @@ export const telemetryRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(409).send({ message: "You already have an open flag on this annotation." });
       }
 
-      const flag = await fastify.db.annotationFlag.create({
-        data: {
-          annotationId: request.params.id,
-          flaggedById:  user.id,
-          reason:       body.reason,
-          notes:        body.notes,
-        },
+      // Create flag + increment counter + conditionally escalate — all atomic.
+      //
+      // SELECT … FOR UPDATE serialises concurrent flag submissions at the DB level.
+      // Without the lock, two simultaneous requests can both read flagCount = 2,
+      // both increment to 3, and both execute the escalation UPDATE — producing
+      // duplicate status transitions. The row lock ensures only one transaction
+      // can hold the lock at a time, so exactly one transaction triggers escalation.
+      const [flag, updatedAnnotation] = await fastify.db.$transaction(async tx => {
+        // Acquire row-level lock before reading flagCount
+        await tx.$queryRaw`
+          SELECT id FROM annotations
+          WHERE  id = ${request.params.id}::uuid
+          FOR    UPDATE
+        `;
+
+        const flag = await tx.annotationFlag.create({
+          data: {
+            annotationId: request.params.id,
+            flaggedById:  user.id,
+            reason:       body.reason,
+            notes:        body.notes,
+          },
+        });
+
+        const updated = await tx.annotation.update({
+          where:  { id: request.params.id },
+          data:   { flagCount: { increment: 1 } },
+          select: { id: true, flagCount: true, status: true },
+        });
+
+        // Auto-escalation: only escalate published annotations
+        if (
+          updated.flagCount >= FLAG_ESCALATION_THRESHOLD &&
+          updated.status === "published"
+        ) {
+          await tx.annotation.update({
+            where: { id: request.params.id },
+            data: {
+              status:       "flagged",
+              flaggedReason: body.reason,
+            },
+          });
+        }
+
+        return [flag, updated];
       });
 
       await fastify.audit(request, {
         action:       "annotation.flagged",
         resourceType: "annotation_flag",
         resourceId:   flag.id,
-        newValues:    { reason: body.reason, annotationId: request.params.id },
+        newValues: {
+          reason:        body.reason,
+          annotationId:  request.params.id,
+          flagCount:     updatedAnnotation.flagCount,
+          autoEscalated: updatedAnnotation.flagCount >= FLAG_ESCALATION_THRESHOLD,
+        },
       });
 
-      return reply.code(201).send(flag);
+      return reply.code(201).send({
+        flagId:    flag.id,
+        flagCount: updatedAnnotation.flagCount,
+        escalated: updatedAnnotation.flagCount >= FLAG_ESCALATION_THRESHOLD,
+      });
     },
   );
 
