@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { Device, Annotation } from "@logiqo/shared";
+import { DeviceAnnotationFeed } from "@/components/devices/device-annotation-feed";
 
 interface DeviceTabsProps {
   device:      Device;
@@ -44,20 +45,6 @@ function JsonTable({ data, label }: { data: Record<string, unknown>; label: stri
   );
 }
 
-const ANNOTATION_TYPE_LABELS: Record<string, string> = {
-  operational_friction: "Operational Friction",
-  failure_mode:         "Failure Mode",
-  material_tolerance:   "Material Tolerance",
-  tooling_anomaly:      "Tooling Anomaly",
-  general_observation:  "General Observation",
-};
-
-const SEVERITY_CONFIG: Record<string, { dot: string; badge: string }> = {
-  critical: { dot: "bg-red-500",    badge: "badge-critical" },
-  high:     { dot: "bg-orange-500", badge: "badge-high"     },
-  medium:   { dot: "bg-amber-400",  badge: "badge-medium"   },
-  low:      { dot: "bg-emerald-500",badge: "badge-low"      },
-};
 
 export function DeviceTabs({ device, annotations }: DeviceTabsProps) {
   const [active, setActive] = useState<TabId>("overview");
@@ -197,53 +184,12 @@ export function DeviceTabs({ device, annotations }: DeviceTabsProps) {
 
         {/* ── Annotations ───────────────────────────────────────────────── */}
         {active === "annotations" && (
-          <div id="panel-annotations" role="tabpanel" className="space-y-4">
-            {annotations.length === 0 ? (
-              <div className="text-center py-10">
-                <p className="text-sm text-gray-400">No peer annotations for this device yet.</p>
-                <a
-                  href="/dashboard/annotations/new"
-                  className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 transition-colors"
-                >
-                  Submit first annotation
-                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
-                  </svg>
-                </a>
-              </div>
-            ) : (
-              annotations.map((ann) => {
-                const sev = ann.severity ? SEVERITY_CONFIG[ann.severity] : null;
-                return (
-                  <article key={ann.id} className="rounded-xl border border-gray-200 bg-white p-5">
-                    <div className="flex items-start justify-between gap-3 flex-wrap">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="badge badge-info text-xs">
-                          {ANNOTATION_TYPE_LABELS[ann.annotationType] ?? ann.annotationType}
-                        </span>
-                        {sev && (
-                          <span className={`badge ${sev.badge}`}>
-                            <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${sev.dot}`} />
-                            {ann.severity}
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-xs text-gray-400">
-                        {new Date(ann.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
-                      </span>
-                    </div>
-                    <h3 className="mt-3 text-sm font-semibold text-gray-900">{ann.title}</h3>
-                    <p className="mt-1.5 text-sm text-gray-600 leading-relaxed line-clamp-3">{ann.body}</p>
-                    {ann.author && (
-                      <p className="mt-3 text-xs text-gray-400">
-                        {ann.author.fullName}
-                        {ann.author.specialty ? ` · ${ann.author.specialty}` : ""}
-                      </p>
-                    )}
-                  </article>
-                );
-              })
-            )}
+          <div id="panel-annotations" role="tabpanel">
+            <DeviceAnnotationFeed
+              deviceId={device.id}
+              initialAnnotations={annotations}
+              initialTotal={annotations.length}
+            />
           </div>
         )}
       </div>

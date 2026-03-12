@@ -36,6 +36,11 @@ const Icon = {
       <path d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
     </svg>
   ),
+  Moderation: () => (
+    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5 shrink-0">
+      <path d="M3 3v1.5M3 21v-6m0 0 2.77-.693a9 9 0 0 1 6.208.682l.108.054a9 9 0 0 0 6.086.71l3.114-.732a48.524 48.524 0 0 1-.005-10.499l-3.11.732a9 9 0 0 1-6.085-.711l-.108-.054a9 9 0 0 0-6.208-.682L3 4.5M3 15V4.5" />
+    </svg>
+  ),
   SignOut: () => (
     <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 shrink-0">
       <path d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9" />
@@ -49,11 +54,12 @@ const Icon = {
 };
 
 const navItems = [
-  { href: "/dashboard/devices",     label: "Hardware Index", Icon: Icon.HardwareIndex, adminOnly: false },
-  { href: "/dashboard/annotations", label: "Peer Telemetry", Icon: Icon.PeerTelemetry, adminOnly: false },
-  { href: "/dashboard/alerts",      label: "Safety Alerts",  Icon: Icon.SafetyAlerts,  adminOnly: false },
-  { href: "/dashboard/admin",       label: "Admin",          Icon: Icon.Admin,          adminOnly: true  },
-  { href: "/dashboard/settings",    label: "Settings",       Icon: Icon.Settings,       adminOnly: true  },
+  { href: "/dashboard/devices",           label: "Hardware Index", Icon: Icon.HardwareIndex, adminOnly: false },
+  { href: "/dashboard/annotations",       label: "Peer Telemetry", Icon: Icon.PeerTelemetry, adminOnly: false },
+  { href: "/dashboard/alerts",            label: "Safety Alerts",  Icon: Icon.SafetyAlerts,  adminOnly: false },
+  { href: "/dashboard/admin",             label: "Admin",          Icon: Icon.Admin,          adminOnly: true  },
+  { href: "/dashboard/admin/moderation",  label: "Moderation",     Icon: Icon.Moderation,     adminOnly: true  },
+  { href: "/dashboard/settings",          label: "Settings",       Icon: Icon.Settings,       adminOnly: true  },
 ];
 
 const ROLE_LABELS: Record<string, string> = {
@@ -187,7 +193,14 @@ export function SidebarNav({ user }: SidebarNavProps) {
           {navItems
             .filter((item) => !item.adminOnly || isAdmin)
             .map((item) => {
-              const isActive = pathname.startsWith(item.href);
+              // For /dashboard/admin, only highlight if NOT on a deeper admin sub-route
+              // that has its own nav entry (e.g. /dashboard/admin/moderation).
+              const isActive =
+                item.href === "/dashboard/admin"
+                  ? pathname === "/dashboard/admin" ||
+                    (pathname.startsWith("/dashboard/admin/") &&
+                      !pathname.startsWith("/dashboard/admin/moderation"))
+                  : pathname.startsWith(item.href);
               return (
                 <Link
                   key={item.href}

@@ -1,9 +1,9 @@
-import Link from "next/link";
-import { apiClient } from "@/lib/api-client";
-import type { Device, AuditLog } from "@logiqo/shared";
-import type { AdminStats } from "@/lib/api-client";
-import { AddDeviceForm } from "@/components/admin/add-device-form";
-import { VerificationQueue } from "@/components/admin/verification-queue";
+import { apiClient }            from "@/lib/api-client";
+import type { AuditLog }        from "@logiqo/shared";
+import type { AdminStats }      from "@/lib/api-client";
+import { AddDeviceForm }        from "@/components/admin/add-device-form";
+import { VerificationQueue }    from "@/components/admin/verification-queue";
+import { PendingDevicesTable }  from "@/components/admin/pending-devices-table";
 
 export const metadata = {
   title: "Admin Dashboard | LogiQo MedTech",
@@ -58,9 +58,8 @@ function StatCard({
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default async function AdminPage() {
-  const [statsResult, pendingResult, logsResult, metaResult, usersResult] = await Promise.allSettled([
+  const [statsResult, logsResult, metaResult, usersResult] = await Promise.allSettled([
     apiClient.admin.stats(),
-    apiClient.admin.pendingDevices({ limit: 20 }),
     apiClient.admin.auditLogs({ limit: 50 }),
     apiClient.devices.meta(),
     apiClient.admin.users({ limit: 50 }),
@@ -69,10 +68,6 @@ export default async function AdminPage() {
   const stats: AdminStats = statsResult.status === "fulfilled"
     ? statsResult.value
     : { pendingDevices: 0, auditEventsToday: 0, activeDevices: 0, activeAlerts: 0 };
-
-  const pendingDevices: Device[] = pendingResult.status === "fulfilled"
-    ? pendingResult.value.data
-    : [];
 
   const auditLogs: AuditLog[] = logsResult.status === "fulfilled"
     ? logsResult.value.data
@@ -139,72 +134,18 @@ export default async function AdminPage() {
         <AddDeviceForm manufacturers={meta.manufacturers} categories={meta.categories} />
       </section>
 
-      {/* ── Pending Approvals ──────────────────────────────────────────────── */}
+      {/* ── Pending Approvals — live-polling client component ───────────────── */}
       <section aria-labelledby="pending-heading">
         <h2 id="pending-heading" className="mb-4">
           Pending Device Approvals
         </h2>
 
-        <div className="card overflow-hidden">
-          {pendingDevices.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="data-table" aria-label="Devices awaiting approval">
-                <caption className="sr-only">
-                  Devices submitted for review, awaiting safety officer approval
-                </caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Device</th>
-                    <th scope="col">Manufacturer</th>
-                    <th scope="col">Category</th>
-                    <th scope="col">Submitted</th>
-                    <th scope="col"><span className="sr-only">Actions</span></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pendingDevices.map((device) => (
-                    <tr key={device.id}>
-                      <td>
-                        <p className="font-semibold text-gray-900">{device.name}</p>
-                        <p className="font-mono text-2xs text-gray-400 mt-0.5">{device.sku}</p>
-                      </td>
-                      <td className="text-gray-700">{device.manufacturer?.name ?? "—"}</td>
-                      <td className="text-gray-600">{device.category?.name ?? "—"}</td>
-                      <td>
-                        <time className="text-sm text-gray-500" dateTime={device.createdAt}>
-                          {new Date(device.createdAt).toLocaleDateString("en-US", {
-                            month: "short", day: "numeric", year: "numeric",
-                          })}
-                        </time>
-                      </td>
-                      <td>
-                        <div className="flex items-center justify-end">
-                          <Link
-                            href={`/dashboard/admin/devices/${device.id}`}
-                            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 transition-colors"
-                          >
-                            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.964-7.178Z" />
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
-                            </svg>
-                            Review
-                          </Link>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="flex items-center justify-center gap-2 py-10 text-sm text-gray-400">
-              <svg aria-hidden="true" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-              </svg>
-              {apiDown ? "API unavailable — cannot load pending approvals" : "No pending approvals — all caught up!"}
-            </div>
-          )}
-        </div>
+        {/*
+          PendingDevicesTable is a "use client" component that polls
+          GET /admin/devices/pending every 30 s via TanStack Query.
+          It owns its own loading / error / empty states.
+        */}
+        <PendingDevicesTable />
       </section>
 
       {/* ── Verification Queue ──────────────────────────────────────────────── */}
@@ -286,9 +227,19 @@ export default async function AdminPage() {
                 <p className="text-xs text-gray-400">
                   Showing last <span className="font-semibold text-gray-600">{auditLogs.length}</span> events
                 </p>
-                <button className="btn-ghost text-xs py-1 px-2" aria-label="Export audit log as CSV">
+                {/*
+                  Phase 11 stub — Export CSV requires GET /admin/audit-logs/export
+                  (streaming CSV response with Content-Disposition: attachment).
+                  The endpoint is not yet confirmed from the backend Phase 8 scope.
+                  Disabled to avoid presenting a non-functional control to reviewers.
+                */}
+                <span
+                  aria-disabled="true"
+                  title="CSV export — coming in Phase 11"
+                  className="btn-ghost text-xs py-1 px-2 opacity-40 cursor-not-allowed pointer-events-none select-none"
+                >
                   Export CSV
-                </button>
+                </span>
               </div>
             </>
           ) : (

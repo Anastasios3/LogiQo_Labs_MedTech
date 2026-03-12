@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
-import Link from "next/link";
-import { apiClient } from "@/lib/api-client";
+import { useState, useEffect }  from "react";
+import { useRouter }            from "next/navigation";
+import Link                     from "next/link";
+import { apiClient }            from "@/lib/api-client";
+import { useToast }             from "@/components/ui/toast";
 import type { Device, Annotation } from "@logiqo/shared";
 
 /* ─── Field row ─────────────────────────────────────────────────────────── */
@@ -53,6 +54,7 @@ const REG_DOT: Record<string, string> = {
 /* ─── Page ──────────────────────────────────────────────────────────────── */
 export default function AdminDeviceReviewPage({ params }: { params: { id: string } }) {
   const router = useRouter();
+  const toast  = useToast();
   const [device,      setDevice]      = useState<Device | null>(null);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [loading,     setLoading]     = useState(true);
@@ -82,6 +84,10 @@ export default function AdminDeviceReviewPage({ params }: { params: { id: string
     setActionError("");
     try {
       await apiClient.admin.approveDevice(device.id);
+      toast.success(
+        "Device approved",
+        `${device.name} is now live in the Hardware Index.`,
+      );
       router.push("/dashboard/admin");
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Approval failed");
@@ -95,6 +101,10 @@ export default function AdminDeviceReviewPage({ params }: { params: { id: string
     setActionError("");
     try {
       await apiClient.admin.rejectDevice(device.id, rejectReason.trim());
+      toast.info(
+        "Device rejected",
+        `${device.name} has been rejected. The decision is recorded in the audit log.`,
+      );
       router.push("/dashboard/admin");
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Rejection failed");

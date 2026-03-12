@@ -1,7 +1,8 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { apiClient } from "@/lib/api-client";
-import { DeviceTabs } from "@/components/devices/device-tabs";
+import { apiClient }        from "@/lib/api-client";
+import { DeviceTabs }       from "@/components/devices/device-tabs";
+import { DocumentViewer }   from "@/components/devices/document-viewer";
 
 interface PageProps {
   params: { id: string };
@@ -128,25 +129,14 @@ export default async function DeviceDetailPage({ params }: PageProps) {
             </dl>
           </div>
 
-          {/* Documents */}
-          {dev.documents && dev.documents.length > 0 && (
-            <div className="card p-5 space-y-3">
-              <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Documents</h3>
-              <ul className="space-y-2">
-                {dev.documents.map((doc: { id: string; title: string; documentType: string; version?: string | null; mimeType?: string | null; fileSizeBytes?: number | null }) => (
-                  <li key={doc.id} className="flex items-center justify-between gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-gray-800 truncate">{doc.title}</p>
-                      <p className="text-xs text-gray-400 capitalize">{doc.documentType.replace(/_/g, " ")}</p>
-                    </div>
-                    <span className="shrink-0 text-xs text-gray-400">
-                      {doc.fileSizeBytes ? `${(doc.fileSizeBytes / 1024).toFixed(0)} KB` : ""}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+          {/* Documents — pre-signed URL viewer */}
+          <DocumentViewer
+            deviceId={dev.id}
+            documents={(dev.documents ?? []) as {
+              id: string; title: string; documentType: string;
+              version?: string | null; mimeType?: string | null; fileSizeBytes?: number | null;
+            }[]}
+          />
 
           {/* Annotate CTA */}
           <Link

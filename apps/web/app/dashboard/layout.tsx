@@ -1,5 +1,6 @@
 import { SidebarNav }       from "@/components/sidebar-nav";
 import { SubscriptionGate } from "@/components/SubscriptionGate";
+import { Toaster }          from "@/components/ui/toast";
 
 // Dev-mode mock user when AUTH0_SECRET is not configured
 const DEV_USER = {
@@ -46,6 +47,15 @@ export default async function DashboardLayout({
       <a href="#main-content" className="skip-link">
         Skip to main content
       </a>
+
+      {/*
+        Toaster sits outside the page chrome so toasts always appear
+        in the top-right corner regardless of scroll position or overlays.
+        The Zustand store persists across client-side navigations, so a toast
+        fired on /admin/devices/:id will still be visible after router.push()
+        lands on /admin.
+      */}
+      <Toaster />
 
       <div className="flex h-screen overflow-hidden bg-surface-subtle">
         {/* Sidebar — aside landmark for navigation */}

@@ -233,6 +233,15 @@ export const apiClient = {
         method: "POST",
         body:   JSON.stringify(body),
       }),
+
+    // Endorsements
+    endorse: (annotationId: string) =>
+      apiFetch<{ endorsementCount: number }>(`/annotations/${annotationId}/endorse`, {
+        method: "POST",
+      }),
+
+    unendorse: (annotationId: string) =>
+      apiFetch<void>(`/annotations/${annotationId}/endorse`, { method: "DELETE" }),
   },
 
   // ── Users / Verification ──────────────────────────────────────────────────────
@@ -340,6 +349,37 @@ export const apiClient = {
       apiFetch<void>(`/annotations/${annotationId}/flags/${flagId}`, {
         method: "PATCH",
         body:   JSON.stringify({ resolution }),
+      }),
+
+    // Annotation moderation
+    flaggedAnnotations: (params?: { page?: number; limit?: number }) =>
+      apiFetch<{ data: Annotation[]; total: number; page: number; limit: number }>(
+        `/admin/annotations${buildQs({ ...(params ?? {}), status: "flagged" })}`
+      ),
+
+    // PATCH /admin/annotations/:id/moderate — approve or remove a flagged annotation.
+    //
+    // Action enum is sourced from moderateAnnotationSchema in @logiqo/shared:
+    //   z.enum(["approve", "reject"])
+    // "approve" → restore annotation to published status
+    // "reject"  → remove annotation from public visibility (the removal verb in the schema
+    //             is "reject", NOT "remove" — confirmed against moderateAnnotationSchema)
+    //
+    // Backend handler: PATCH /admin/annotations/:id/moderate (to be registered in
+    // apps/api/src/modules/admin/routes.ts — currently device-only, annotation
+    // moderation endpoint is Phase 11 backend work).
+    approveAnnotation: (annotationId: string, reviewNotes?: string) =>
+      apiFetch<void>(`/admin/annotations/${annotationId}/moderate`, {
+        method: "PATCH",
+        body:   JSON.stringify({ action: "approve", reviewNotes }),
+      }),
+
+    removeAnnotation: (annotationId: string, reason: string) =>
+      apiFetch<void>(`/admin/annotations/${annotationId}/moderate`, {
+        method: "PATCH",
+        // "reject" is the correct schema value — moderateAnnotationSchema uses
+        // z.enum(["approve", "reject"]). The reason text maps to reviewNotes.
+        body:   JSON.stringify({ action: "reject", reviewNotes: reason }),
       }),
   },
 };

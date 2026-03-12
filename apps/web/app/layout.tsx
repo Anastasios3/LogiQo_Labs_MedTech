@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { UserProvider } from "@auth0/nextjs-auth0/client";
+import { Providers }    from "./providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -30,7 +31,11 @@ export default function RootLayout({
         />
       </head>
       <body className="h-full">
-        <UserProvider>{children}</UserProvider>
+        <UserProvider>
+          <Providers>
+            {children}
+          </Providers>
+        </UserProvider>
       </body>
     </html>
   );

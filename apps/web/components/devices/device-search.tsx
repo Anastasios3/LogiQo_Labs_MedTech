@@ -48,7 +48,8 @@ export function DeviceSearch({
   const router       = useRouter();
   const searchParams = useSearchParams();
   const [isPending, startTransition] = useTransition();
-  const inputRef  = useRef<HTMLInputElement>(null);
+  const inputRef    = useRef<HTMLInputElement>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputId   = useId();
   const statusId  = useId();
   const catId     = useId();
@@ -117,7 +118,11 @@ export function DeviceSearch({
             type="search"
             placeholder="Search by name, SKU, manufacturer, description…"
             defaultValue={initialQuery}
-            onChange={(e) => navigate({ q: e.target.value })}
+            onChange={(e) => {
+              const val = e.target.value;
+              if (debounceRef.current) clearTimeout(debounceRef.current);
+              debounceRef.current = setTimeout(() => navigate({ q: val }), 500);
+            }}
             aria-busy={isPending}
             spellCheck={false}
             autoComplete="off"
